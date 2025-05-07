@@ -16,6 +16,8 @@ import { Currency } from "@v4-core/types/Currency.sol";
 import { TickMath } from "@v4-core/libraries/TickMath.sol";
 import { PoolSwapTest } from "@v4-core/test/PoolSwapTest.sol";
 import { PoolModifyLiquidityTest } from "@v4-core/test/PoolModifyLiquidityTest.sol";
+import { StateView, IStateView } from "@v4-periphery/lens/StateView.sol";
+import { DopplerLensQuoter } from "src/lens/DopplerLens.sol";
 import { V4Quoter, IV4Quoter } from "@v4-periphery/lens/V4Quoter.sol";
 import { BalanceDelta } from "@v4-core/types/BalanceDelta.sol";
 import { ProtocolFeeLibrary } from "@v4-core/libraries/ProtocolFeeLibrary.sol";
@@ -128,7 +130,8 @@ contract BaseTest is Test, Deployers {
 
     V4Quoter quoter;
     CustomRouter router;
-
+    DopplerLensQuoter lensQuoter;
+    StateView stateView;
     // Deploy functions
 
     /// @dev Deploys a new pair of asset and numeraire tokens and the related Doppler hook
@@ -136,6 +139,7 @@ contract BaseTest is Test, Deployers {
     function _deploy() public {
         _deployTokens();
         _deployDoppler();
+        _deployLensQuoter();
     }
 
     /// @dev Reuses an existing pair of asset and numeraire tokens and deploys the related
@@ -144,6 +148,7 @@ contract BaseTest is Test, Deployers {
         asset = asset_;
         numeraire = numeraire_;
         _deployDoppler();
+        _deployLensQuoter();
     }
 
     /// @dev Deploys a new pair of asset and numeraire tokens and the related Doppler hook with
@@ -256,6 +261,11 @@ contract BaseTest is Test, Deployers {
             manager.setProtocolFee(key, protocolFee);
             vm.stopPrank();
         }
+    }
+
+    function _deployLensQuoter() internal {
+        stateView = new StateView(manager);
+        lensQuoter = new DopplerLensQuoter(manager, IStateView(stateView));
     }
 
     function setUp() public virtual {
