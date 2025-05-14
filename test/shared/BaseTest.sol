@@ -57,13 +57,13 @@ contract BaseTest is Test, Deployers {
     uint256 constant DEFAULT_MINIMUM_PROCEEDS = 6667e15; // 6.667 eth
     uint256 constant DEFAULT_MAXIMUM_PROCEEDS = 13_333e15; // 13.333 eth
 
-    uint256 constant SALE_DURATION = 8 hours;
+    uint256 constant SALE_DURATION = 6 hours;
     uint256 constant DEFAULT_STARTING_TIME = 1 days;
     uint256 constant DEFAULT_ENDING_TIME = DEFAULT_STARTING_TIME + SALE_DURATION;
 
     // int24 constant DEFAULT_GAMMA = 18850;
     // int24 constant DEFAULT_GAMMA = 54_670;
-    int24 constant DEFAULT_GAMMA = 824;
+    int24 constant DEFAULT_GAMMA = 5960;
     uint256 constant DEFAULT_EPOCH_LENGTH = 200 seconds;
 
     // default to feeless case for now
@@ -71,10 +71,10 @@ contract BaseTest is Test, Deployers {
     int24 constant DEFAULT_TICK_SPACING = 8;
     uint256 constant DEFAULT_NUM_PD_SLUGS = 3;
 
-    int24 constant DEFAULT_START_TICK = -175_184;
+    int24 constant DEFAULT_START_TICK = -170_352;
     // int24 constant DEFAULT_END_TICK = 195_000;
     // int24 constant DEFAULT_START_TICK = -171_184;
-    int24 constant DEFAULT_END_TICK = 190_000;
+    int24 constant DEFAULT_END_TICK = 250_776;
 
     address constant TOKEN_A = address(0x8888);
     address constant TOKEN_B = address(0x9999);
