@@ -120,7 +120,7 @@ contract V4PocTest is DopplerLensTest {
         uint256 tokenMigrated = IERC20(asset).balanceOf(address(0xbeef));
         uint256 ethMigrated = address(0xbeef).balance;
 
-        console.log("\n");
+        console.log("\n-------------- MIGRATION RESULT ------------------");
         console.log("ETH migrated: ", ethMigrated);
         console.log("Token migrated: ", tokenMigrated);
 
@@ -227,7 +227,7 @@ contract V4PocTest is DopplerLensTest {
         uint256 tokenMigrated = IERC20(asset).balanceOf(address(0xbeef));
         uint256 ethMigrated = address(0xbeef).balance;
 
-        console.log("\n");
+        console.log("\n-------------- MIGRATION RESULT ------------------");
         console.log("ETH migrated: ", ethMigrated);
         console.log("Token migrated: ", tokenMigrated);
 
@@ -361,7 +361,7 @@ contract V4PocTest is DopplerLensTest {
         uint256 tokenMigrated = IERC20(asset).balanceOf(address(0xbeef));
         uint256 ethMigrated = address(0xbeef).balance;
 
-        console.log("\n");
+        console.log("\n-------------- MIGRATION RESULT ------------------");
         console.log("ETH migrated: ", ethMigrated);
         console.log("Token migrated: ", tokenMigrated);
 
