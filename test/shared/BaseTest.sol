@@ -60,14 +60,14 @@ contract BaseTest is Test, Deployers {
     int24 constant DEFAULT_GAMMA = 800;
     uint256 constant DEFAULT_EPOCH_LENGTH = 200 seconds;
 
-    // 0.3% fee
-    uint24 constant DEFAULT_FEE = 3000;
+    // 2% fee
+    uint24 constant DEFAULT_FEE = 20_000;
     int24 constant DEFAULT_TICK_SPACING = 8;
     uint256 constant DEFAULT_NUM_PD_SLUGS = 10;
 
-    int24 constant DEFAULT_START_TICK = -172_976;
+    // int24 constant DEFAULT_START_TICK = -172_976;
     int24 constant DEFAULT_END_TICK = 186_840;
-    // int24 constant DEFAULT_START_TICK = -175_848;
+    int24 constant DEFAULT_START_TICK = -175_848;
     // int24 constant DEFAULT_END_TICK = 195_000;
 
     address constant TOKEN_A = address(0x8888);
