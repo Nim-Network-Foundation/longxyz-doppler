@@ -49,21 +49,21 @@ contract BaseTest is Test, Deployers {
     }
 
     // Constants
-
     uint256 constant DEFAULT_NUM_TOKENS_TO_SELL = 600_000_000 ether;
     uint256 constant DEFAULT_MINIMUM_PROCEEDS = 6.65 ether;
-    uint256 constant DEFAULT_MAXIMUM_PROCEEDS = 10 ether;
+    uint256 constant DEFAULT_MAXIMUM_PROCEEDS = 15 ether;
+    uint256 constant SALE_DURATION = 6 hours;
     uint256 constant DEFAULT_STARTING_TIME = 1 days;
-    uint256 constant DEFAULT_ENDING_TIME = 1 days + 6 hours;
-    int24 constant DEFAULT_GAMMA = 800;
+    uint256 constant DEFAULT_ENDING_TIME = 1 days + SALE_DURATION;
+    int24 constant DEFAULT_GAMMA = 1000;
     uint256 constant DEFAULT_EPOCH_LENGTH = 200 seconds;
 
     // default to feeless case for now
     uint24 constant DEFAULT_FEE = 20_000;
     int24 constant DEFAULT_TICK_SPACING = 2;
-    uint256 constant DEFAULT_NUM_PD_SLUGS = 10;
+    uint256 constant DEFAULT_NUM_PD_SLUGS = 15;
 
-    int24 constant DEFAULT_START_TICK = 174_312;
+    int24 constant DEFAULT_START_TICK = 170_352;
     int24 constant DEFAULT_END_TICK = 186_840;
 
     address constant TOKEN_A = address(0x8888);
