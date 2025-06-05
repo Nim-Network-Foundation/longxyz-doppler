@@ -45,7 +45,7 @@ interface ICustomUniswapV3Locker {
         uint256 tokenId
     ) external;
 
-    function claimFeesAndExit(
+    function unlock(
         uint256 tokenId
     ) external;
 }

@@ -16,6 +16,8 @@ import {
     WETH_BASE,
     UNISWAP_V3_ROUTER_02_BASE
 } from "test/shared/Addresses.sol";
+import { console } from "forge-std/console.sol";
+import { Constants } from "@v4-core-test/utils/Constants.sol";
 
 contract CustomUniswapV3MigratorTest is Test {
     CustomUniswapV3Migrator public migrator;
@@ -24,8 +26,12 @@ contract CustomUniswapV3MigratorTest is Test {
     address constant LOCKER_OWNER = address(0xb055);
     address constant DOPPLER_FEE_RECEIVER = address(0x2222);
     address constant INTEGRATOR_FEE_RECEIVER = address(0x1111);
+    int24 constant DEFAULT_LOWER_TICK = 174_312;
+    int24 constant DEFAULT_UPPER_TICK = 186_840;
+    // int24 constant DEFAULT_LOWER_TICK = 167_520;
+    // int24 constant DEFAULT_UPPER_TICK = 200_040;
 
-    bytes public liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+    bytes public liquidityMigratorData = abi.encode(DEFAULT_LOWER_TICK, DEFAULT_UPPER_TICK, INTEGRATOR_FEE_RECEIVER);
 
     function setUp() public {
         vm.createSelectFork(vm.envString("BASE_MAINNET_RPC_URL"), 31_118_046);
@@ -74,25 +80,24 @@ contract CustomUniswapV3MigratorTest is Test {
         migrator.migrate(uint160(0), address(0x1111), address(0x2222), address(0));
     }
 
-    // function test_migrate() public {
-    //     TestERC20 token0 = new TestERC20(1000 ether);
-    //     TestERC20 token1 = new TestERC20(1000 ether);
+    function test_migrate() public {
+        TestERC20 token0 = new TestERC20(1000 ether);
+        TestERC20 token1 = new TestERC20(1000 ether);
 
-    //     address pool = migrator.initialize(address(token0), address(token1), liquidityMigratorData);
+        address pool = migrator.initialize(address(token0), address(token1), liquidityMigratorData);
 
-    //     token0.transfer(address(migrator), 1000 ether);
-    //     token1.transfer(address(migrator), 1000 ether);
+        token0.transfer(address(migrator), 1000 ether);
+        token1.transfer(address(migrator), 1000 ether);
 
-    //     int24 lowerTick = (TickMath.MIN_TICK / 200) * 200;
-    //     uint256 liquidity =
-    //         migrator.migrate(TickMath.getSqrtPriceAtTick(lowerTick), address(token0), address(token1), address(0xbeef));
+        uint256 liquidity =
+            migrator.migrate(Constants.SQRT_PRICE_1_1, address(token0), address(token1), address(0xbeef));
 
-    //     assertEq(token0.balanceOf(address(migrator)), 0, "Wrong migrator token0 balance");
-    //     assertEq(token1.balanceOf(address(migrator)), 0, "Wrong migrator token1 balance");
+        assertEq(token0.balanceOf(address(migrator)), 0, "Wrong migrator token0 balance");
+        assertEq(token1.balanceOf(address(migrator)), 0, "Wrong migrator token1 balance");
 
-    //     assertEq(token0.balanceOf(pool), 1000 ether, "Wrong pool token0 balance");
-    //     assertEq(token1.balanceOf(pool), 1000 ether, "Wrong pool token1 balance");
-    // }
+        assertEq(token0.balanceOf(pool), 1000 ether, "Wrong pool token0 balance");
+        assertEq(token1.balanceOf(pool), 1000 ether, "Wrong pool token1 balance");
+    }
 
     // function test_migrate_KeepsCorrectPrice() public {
     //     TestERC20 token0 = new TestERC20(131_261_409_265_385_327_997_940);
