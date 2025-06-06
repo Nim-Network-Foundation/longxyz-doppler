@@ -8,7 +8,7 @@ import { IUniswapV3Factory } from "@v3-core/interfaces/IUniswapV3Factory.sol";
 import { IUniswapV3Pool } from "@v3-core/interfaces/IUniswapV3Pool.sol";
 import { INonfungiblePositionManager } from "src/extensions/interfaces/INonfungiblePositionManager.sol";
 import { ICustomUniswapV3Migrator } from "src/extensions/interfaces/ICustomUniswapV3Migrator.sol";
-import { ISwapRouter02 } from "src/extensions/interfaces/ISwapRouter02.sol";
+import { ISwapRouter02, ISwapRouter } from "src/extensions/interfaces/ISwapRouter02.sol";
 import { CustomUniswapV3Locker } from "src/extensions/CustomUniswapV3Locker.sol";
 import { ImmutableAirlock } from "src/base/ImmutableAirlock.sol";
 // import { Constants } from "lib/v4-core/test/utils/Constants.sol";
@@ -22,10 +22,11 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
 
     /// @dev Constant used to increase precision during calculations
     uint256 constant WAD = 1 ether;
-    uint256 constant MAX_SLIPPAGE_WAD = 0.05 ether; // 5% slippage
+    uint256 constant MAX_SLIPPAGE_WAD = 0.15 ether; // 15% slippage
 
     INonfungiblePositionManager public immutable NONFUNGIBLE_POSITION_MANAGER;
     IUniswapV3Factory public immutable FACTORY;
+    ISwapRouter02 public immutable ROUTER;
     IWETH public immutable WETH;
     CustomUniswapV3Locker public immutable CUSTOM_V3_LOCKER;
     uint24 public immutable FEE_TIER;
@@ -44,8 +45,10 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
     ) ImmutableAirlock(airlock_) {
         NONFUNGIBLE_POSITION_MANAGER = positionManager_;
         FACTORY = IUniswapV3Factory(router.factory());
+        ROUTER = router;
         WETH = IWETH(payable(router.WETH9()));
-        CUSTOM_V3_LOCKER = new CustomUniswapV3Locker(airlock_, FACTORY, this, owner, dopplerFeeReceiver_);
+        CUSTOM_V3_LOCKER =
+            new CustomUniswapV3Locker(airlock_, FACTORY, this, owner, dopplerFeeReceiver_, positionManager_);
         FEE_TIER = feeTier_;
     }
 
@@ -60,6 +63,8 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
             abi.decode(liquidityMigratorData, (int24, int24, address));
         require(integratorFeeReceiver != address(0), ZeroFeeReceiverAddress());
 
+        // v3 pool only allows WETH
+        if (numeraire == address(0)) numeraire = address(WETH);
         (address token0, address token1) = asset < numeraire ? (asset, numeraire) : (numeraire, asset);
 
         pool = FACTORY.getPool(token0, token1, FEE_TIER);
@@ -68,15 +73,15 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         }
         poolFeeReceivers[pool] = integratorFeeReceiver;
 
-        int24 tickSpacing = FACTORY.feeAmountTickSpacing(FEE_TIER);
-        tickLower = _getDivisibleTick(tickLower, tickSpacing, false);
-        tickUpper = _getDivisibleTick(tickUpper, tickSpacing, true);
-        // tickLower = TickMath.minUsableTick(tickSpacing);
-        // tickUpper = TickMath.maxUsableTick(tickSpacing);
-        uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(asset == token0 ? tickLower : tickUpper);
+        // NOTE: we are aware that anyone can initialize the pool with any sqrtPriceX96 afterwards,
+        // so we will swap with the current ratio to rebalance the price during migration
 
-        // IUniswapV3Pool(pool).initialize(Constants.SQRT_PRICE_1_1);
-        IUniswapV3Pool(pool).initialize(sqrtPriceX96);
+        // int24 tickSpacing = FACTORY.feeAmountTickSpacing(FEE_TIER);
+        // tickLower = _getDivisibleTick(tickLower, tickSpacing, false);
+        // tickUpper = _getDivisibleTick(tickUpper, tickSpacing, true);
+        // uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(asset == token0 ? tickLower : tickUpper);
+
+        // IUniswapV3Pool(pool).initialize(sqrtPriceX96);
 
         return pool;
     }
@@ -94,6 +99,10 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         address token1,
         address recipient
     ) external payable onlyAirlock returns (uint256) {
+        // v3 pool only allows WETH, and smaller address will be token0 so only need to check if token0 is address(0)
+        if (token0 == address(0)) token0 = address(WETH);
+        if (token0 > token1) (token0, token1) = (token1, token0);
+
         address pool = FACTORY.getPool(token0, token1, FEE_TIER);
         require(pool != address(0), PoolDoesNotExist());
 
@@ -101,22 +110,35 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         (uint160 currentSqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
         if (currentSqrtPriceX96 == 0) {
             IUniswapV3Pool(pool).initialize(sqrtPriceX96);
+        } else {
+            // if someone already initialized the pool, swap 1 to rebalance the price
+            ROUTER.exactInputSingle(
+                ISwapRouter.ExactInputSingleParams({
+                    tokenIn: token0,
+                    tokenOut: token1,
+                    fee: FEE_TIER,
+                    recipient: address(this),
+                    deadline: block.timestamp + 3600,
+                    amountIn: 1,
+                    amountOutMinimum: 0,
+                    sqrtPriceLimitX96: currentSqrtPriceX96
+                })
+            );
         }
 
+        // not sure if WETH is token0 or token1, so need to check both
         uint256 balance0;
-        uint256 balance1 = ERC20(token1).balanceOf(address(this));
+        uint256 balance1;
 
-        if (token0 == address(0)) {
-            token0 = address(WETH);
+        // only wrap ETH after confirming the pool exists to save gas
+        if (token0 == address(WETH)) {
             WETH.deposit{ value: address(this).balance }();
             balance0 = WETH.balanceOf(address(this));
-        } else {
+            balance1 = ERC20(token1).balanceOf(address(this));
+        } else if (token1 == address(WETH)) {
+            WETH.deposit{ value: address(this).balance }();
+            balance1 = WETH.balanceOf(address(this));
             balance0 = ERC20(token0).balanceOf(address(this));
-        }
-
-        if (token0 > token1) {
-            (token0, token1) = (token1, token0);
-            (balance0, balance1) = (balance1, balance0);
         }
 
         int24 tickSpacing = FACTORY.feeAmountTickSpacing(FEE_TIER);

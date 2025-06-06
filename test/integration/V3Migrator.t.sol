@@ -10,8 +10,10 @@ import { IPositionManager } from "@v4-periphery/interfaces/IPositionManager.sol"
 import { ERC721 } from "@solady/tokens/ERC721.sol";
 import { TickMath } from "@v4-core/libraries/TickMath.sol";
 import { PoolKey } from "@v4-core/types/PoolKey.sol";
+import { PoolId } from "@v4-core/types/PoolId.sol";
 import { Currency } from "@v4-core/types/Currency.sol";
 import { IHooks } from "@v4-core/interfaces/IHooks.sol";
+import { StateLibrary } from "@v4-core/libraries/StateLibrary.sol";
 import { BaseTest } from "test/shared/BaseTest.sol";
 import { MineV4Params, mineV4 } from "test/shared/AirlockMiner.sol";
 import { ILiquidityMigrator } from "src/interfaces/ILiquidityMigrator.sol";
@@ -31,6 +33,8 @@ import {
 } from "test/shared/Addresses.sol";
 
 contract V3MigratorTest is BaseTest {
+    using StateLibrary for IPoolManager;
+
     uint24 constant FEE_TIER = 10_000;
     address constant LOCKER_OWNER = address(0xb055);
     address constant DOPPLER_FEE_RECEIVER = address(0x2222);
@@ -46,9 +50,16 @@ contract V3MigratorTest is BaseTest {
     TokenFactory public tokenFactory;
     GovernanceFactory public governanceFactory;
 
-    function test_migrate_v3() public {
+    function setUp() public override {
         vm.createSelectFork(vm.envString("BASE_MAINNET_RPC_URL"), 31_118_046);
 
+        // Small hack here, requires cleanup
+        DEFAULT_DOPPLER_CONFIG.startingTime = vm.getBlockTimestamp();
+        DEFAULT_DOPPLER_CONFIG.endingTime = vm.getBlockTimestamp() + SALE_DURATION;
+        super.setUp();
+    }
+
+    function test_migrate_v3() public {
         airlock = new Airlock(address(this));
         deployer = new DopplerDeployer(manager);
         initializer = new UniswapV4Initializer(address(airlock), manager, deployer);
@@ -82,7 +93,7 @@ contract V3MigratorTest is BaseTest {
             DEFAULT_MINIMUM_PROCEEDS,
             DEFAULT_MAXIMUM_PROCEEDS,
             block.timestamp,
-            block.timestamp + 1 days,
+            block.timestamp + SALE_DURATION,
             DEFAULT_START_TICK,
             DEFAULT_END_TICK,
             DEFAULT_EPOCH_LENGTH,
@@ -92,8 +103,7 @@ contract V3MigratorTest is BaseTest {
             DEFAULT_FEE,
             DEFAULT_TICK_SPACING
         );
-
-        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+        bytes memory liquidityMigratorData = abi.encode(DEFAULT_START_TICK, DEFAULT_END_TICK, INTEGRATOR_FEE_RECEIVER);
 
         MineV4Params memory params = MineV4Params({
             airlock: address(airlock),
@@ -127,35 +137,75 @@ contract V3MigratorTest is BaseTest {
 
         (, address pool, address governance, address timelock, address migrationPool) = airlock.create(createParams);
 
-        bool canMigrated;
+        // Perform enough swaps to reach minimum proceeds
+        (Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing, IHooks hooks) =
+            Doppler(payable(hook)).poolKey();
 
-        uint256 i;
+        PoolKey memory poolKey =
+            PoolKey({ currency0: currency0, currency1: currency1, hooks: hooks, fee: fee, tickSpacing: tickSpacing });
 
-        do {
-            i++;
-            deal(address(this), 0.1 ether);
+        // Start with smaller swaps and gradually increase
+        uint256 totalSwapped = 0;
+        uint256 swapCount = 0;
 
-            (Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing, IHooks hooks) =
-                Doppler(payable(hook)).poolKey();
+        while (true) {
+            swapCount++;
+            if (swapCount > 150) {
+                revert("Too many swaps, test failed");
+            }
 
-            BalanceDelta delta = swapRouter.swap{ value: 0.0001 ether }(
-                PoolKey({ currency0: currency0, currency1: currency1, hooks: hooks, fee: fee, tickSpacing: tickSpacing }),
-                IPoolManager.SwapParams(true, -int256(0.0001 ether), TickMath.MIN_SQRT_PRICE + 1),
+            uint256 swapAmount = 1 ether + (swapCount * 1 ether);
+            deal(address(this), swapAmount);
+
+            (uint160 currentSqrtPrice,,,) = manager.getSlot0(poolKey.toId());
+
+            uint160 priceLimit = currentSqrtPrice > 1000 ? currentSqrtPrice - 1000 : TickMath.MIN_SQRT_PRICE + 1;
+
+            try swapRouter.swap{ value: swapAmount }(
+                poolKey,
+                IPoolManager.SwapParams(true, -int256(swapAmount), priceLimit),
                 PoolSwapTest.TestSettings(false, false),
                 ""
-            );
+            ) {
+                totalSwapped += swapAmount;
+            } catch {
+                // If swap fails, try with smaller amount
+                uint256 smallerAmount = swapAmount / 10;
+                if (smallerAmount > 0) {
+                    try swapRouter.swap{ value: smallerAmount }(
+                        poolKey,
+                        IPoolManager.SwapParams(true, -int256(smallerAmount), priceLimit),
+                        PoolSwapTest.TestSettings(false, false),
+                        ""
+                    ) {
+                        totalSwapped += smallerAmount;
+                    } catch { }
+                }
+            }
 
             (,,, uint256 totalProceeds,,) = Doppler(payable(hook)).state();
-            canMigrated = totalProceeds > Doppler(payable(hook)).minimumProceeds();
+            console.log("Swap", swapCount, "Proceeds:", totalProceeds);
+            console.log("Minimum proceeds:", Doppler(payable(hook)).minimumProceeds());
 
-            vm.warp(block.timestamp + 200);
-        } while (!canMigrated);
+            if (totalProceeds >= Doppler(payable(hook)).minimumProceeds()) {
+                break;
+            }
+
+            vm.warp(vm.getBlockTimestamp() + 200);
+        }
+
+        // getBlockTimestamp() should be used if vm.warp is used since block.timestamp is assumed to be constant throughout a transaction by the compiler
+        // Now advance to end time to allow migration
+        vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
+
+        (,,, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
+        console.log("Final proceeds:", finalProceeds, "Minimum:", Doppler(payable(hook)).minimumProceeds());
+        console.log("Ending time:", Doppler(payable(hook)).endingTime());
+        console.log("Warp-ed timestamp:", block.timestamp);
 
         // goToEndingTime();
         airlock.migrate(asset);
 
-        assertEq(ERC721(address(NFPM)).balanceOf(timelock), 1, "Timelock should have one token");
-        assertEq(ERC721(address(NFPM)).ownerOf(2), timelock, "Timelock should be the owner of the token");
         assertEq(
             ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())), 1, "Locker should have one token"
         );

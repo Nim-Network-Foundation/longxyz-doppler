@@ -41,11 +41,13 @@ contract CustomUniswapV3Locker is ICustomUniswapV3Locker, Ownable, ImmutableAirl
         IUniswapV3Factory factory_,
         CustomUniswapV3Migrator migrator_,
         address owner_,
-        address dopplerFeeReceiver_
+        address dopplerFeeReceiver_,
+        INonfungiblePositionManager nonfungiblePositionManager_
     ) Ownable(owner_) ImmutableAirlock(airlock_) {
         FACTORY = factory_;
         MIGRATOR = migrator_;
         DOPPLER_FEE_RECEIVER = dopplerFeeReceiver_;
+        NONFUNGIBLE_POSITION_MANAGER = nonfungiblePositionManager_;
     }
 
     /**
