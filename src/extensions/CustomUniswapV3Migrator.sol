@@ -22,7 +22,8 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
 
     /// @dev Constant used to increase precision during calculations
     uint256 constant WAD = 1 ether;
-    uint256 constant MAX_SLIPPAGE_WAD = 0.05 ether; // 5% slippage
+    /// FIXME: set temporarily to 50% slippage
+    uint256 constant MAX_SLIPPAGE_WAD = 0.50 ether; // 50% slippage
 
     INonfungiblePositionManager public immutable NONFUNGIBLE_POSITION_MANAGER;
     IUniswapV3Factory public immutable FACTORY;
