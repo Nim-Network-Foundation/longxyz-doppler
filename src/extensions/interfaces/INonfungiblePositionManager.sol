@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
 
 interface INonfungiblePositionManager {
     /// @notice Returns the position information associated with a given token ID.

@@ -236,20 +236,20 @@ contract Airlock is Ownable {
      * @param fees Trading fees
      */
     function _handleFees(address token, address integrator, uint256 balance, uint256 fees) internal {
-        if (fees > 0) {
-            uint256 protocolLpFees = fees / 20;
-            uint256 protocolProceedsFees = (balance - fees) / 1000;
-            uint256 protocolFees = Math.max(protocolLpFees, protocolProceedsFees);
-            uint256 maxProtocolFees = fees / 5;
-            uint256 integratorFees;
+        if (fees == 0) return;
 
-            (integratorFees, protocolFees) = protocolFees > maxProtocolFees
-                ? (fees - maxProtocolFees, maxProtocolFees)
-                : (fees - protocolFees, protocolFees);
+        uint256 protocolLpFees = fees / 20;
+        uint256 protocolProceedsFees = (balance - fees) / 1000;
+        uint256 protocolFees = Math.max(protocolLpFees, protocolProceedsFees);
+        uint256 maxProtocolFees = fees / 5;
+        uint256 integratorFees;
 
-            getProtocolFees[token] += protocolFees;
-            getIntegratorFees[integrator][token] += integratorFees;
-        }
+        (integratorFees, protocolFees) = protocolFees > maxProtocolFees
+            ? (fees - maxProtocolFees, maxProtocolFees)
+            : (fees - protocolFees, protocolFees);
+
+        getProtocolFees[token] += protocolFees;
+        getIntegratorFees[integrator][token] += integratorFees;
     }
 
     /**

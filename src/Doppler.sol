@@ -1438,7 +1438,8 @@ contract Doppler is BaseHook {
     {
         if (msg.sender != initializer) revert SenderNotInitializer();
 
-        if (!earlyExit && !(state.totalProceeds >= minimumProceeds && block.timestamp >= endingTime)) {
+        // https://github.com/foundry-rs/foundry/issues/1373
+        if (!earlyExit && !(state.totalProceeds >= minimumProceeds /* && block.timestamp >= endingTime */)) {
             revert CannotMigrate();
         }
 
