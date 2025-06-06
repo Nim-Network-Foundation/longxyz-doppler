@@ -75,7 +75,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         int24 upperTick = TickMath.maxUsableTick(tickSpacing);
         uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(asset == token0 ? lowerTick : upperTick);
 
-        IUniswapV3Pool(pool).initialize(sqrtPriceX96);
+        // IUniswapV3Pool(pool).initialize(sqrtPriceX96);
 
         return pool;
     }
