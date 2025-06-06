@@ -11,7 +11,7 @@ import { ICustomUniswapV3Migrator } from "src/extensions/interfaces/ICustomUnisw
 import { ISwapRouter02 } from "src/extensions/interfaces/ISwapRouter02.sol";
 import { CustomUniswapV3Locker } from "src/extensions/CustomUniswapV3Locker.sol";
 import { ImmutableAirlock } from "src/base/ImmutableAirlock.sol";
-import { console } from "forge-std/console.sol";
+// import { Constants } from "lib/v4-core/test/utils/Constants.sol";
 
 /**
  * @author ant
@@ -69,12 +69,13 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         poolFeeReceivers[pool] = integratorFeeReceiver;
 
         int24 tickSpacing = FACTORY.feeAmountTickSpacing(FEE_TIER);
-        // int24 finalTickLower = _getDivisibleTick(tickLower, tickSpacing, false);
-        // int24 finalTickUpper = _getDivisibleTick(tickUpper, tickSpacing, true);
-        int24 lowerTick = TickMath.minUsableTick(tickSpacing);
-        int24 upperTick = TickMath.maxUsableTick(tickSpacing);
-        uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(asset == token0 ? lowerTick : upperTick);
+        tickLower = _getDivisibleTick(tickLower, tickSpacing, false);
+        tickUpper = _getDivisibleTick(tickUpper, tickSpacing, true);
+        // tickLower = TickMath.minUsableTick(tickSpacing);
+        // tickUpper = TickMath.maxUsableTick(tickSpacing);
+        uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(asset == token0 ? tickLower : tickUpper);
 
+        // IUniswapV3Pool(pool).initialize(Constants.SQRT_PRICE_1_1);
         IUniswapV3Pool(pool).initialize(sqrtPriceX96);
 
         return pool;
@@ -123,7 +124,6 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         // int24 lowerTick = (TickMath.MIN_TICK / tickSpacing) * tickSpacing;
         // int24 upperTick = (TickMath.MAX_TICK / tickSpacing) * tickSpacing;
 
-        console.log("currentTick", currentTick);
         int24 finalTickLower = _getDivisibleTick(currentTick, tickSpacing, false);
         int24 finalTickUpper = _getDivisibleTick(currentTick, tickSpacing, true);
         // require(currentTick >= lowerTick && currentTick <= upperTick, TickOutOfRange(currentTick, lowerTick, upperTick));

@@ -26,8 +26,8 @@ contract CustomUniswapV3MigratorTest is Test {
     address constant LOCKER_OWNER = address(0xb055);
     address constant DOPPLER_FEE_RECEIVER = address(0x2222);
     address constant INTEGRATOR_FEE_RECEIVER = address(0x1111);
-    int24 constant DEFAULT_LOWER_TICK = 174_312;
-    int24 constant DEFAULT_UPPER_TICK = 186_840;
+    int24 constant DEFAULT_LOWER_TICK = 0;
+    int24 constant DEFAULT_UPPER_TICK = 200;
     // int24 constant DEFAULT_LOWER_TICK = 167_520;
     // int24 constant DEFAULT_UPPER_TICK = 200_040;
 
@@ -86,9 +86,12 @@ contract CustomUniswapV3MigratorTest is Test {
 
         address pool = migrator.initialize(address(token0), address(token1), liquidityMigratorData);
 
+        // token0.transfer(address(migrator), 102_020_031_989);
+        // token1.transfer(address(migrator), 100_000_000_000);
         token0.transfer(address(migrator), 1000 ether);
         token1.transfer(address(migrator), 1000 ether);
 
+        // uint160 sqrtPriceX96 = 80828596741349383900952490931;
         uint256 liquidity =
             migrator.migrate(Constants.SQRT_PRICE_1_1, address(token0), address(token1), address(0xbeef));
 
