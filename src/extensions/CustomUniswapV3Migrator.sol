@@ -45,7 +45,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         NONFUNGIBLE_POSITION_MANAGER = positionManager_;
         FACTORY = IUniswapV3Factory(router.factory());
         WETH = IWETH(payable(router.WETH9()));
-        CUSTOM_V3_LOCKER = new CustomUniswapV3Locker(airlock_, FACTORY, this, owner, dopplerFeeReceiver_);
+        CUSTOM_V3_LOCKER = new CustomUniswapV3Locker(airlock_, FACTORY, this, owner, dopplerFeeReceiver_, positionManager_);
         FEE_TIER = feeTier_;
     }
 
