@@ -138,6 +138,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         address integratorFeeReceiver = poolFeeReceivers[pool];
         if (initializedSqrtPriceX96 != 0) {
             (balance0, balance1) = _rebalance(
+                pool,
                 token0,
                 token1,
                 balance0,
@@ -180,6 +181,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
     }
 
     function _rebalance(
+        address pool,
         address token0,
         address token1,
         uint256 balance0,
@@ -190,48 +192,34 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         address integratorFeeReceiver,
         address recipient
     ) internal returns (uint256 balance0AfterSwap, uint256 balance1AfterSwap) {
-        uint256 rebalanceAmount0 = balance0 * REBALANCE_AMOUNT_WAD / WAD;
-        uint256 rebalanceAmount1 = balance1 * REBALANCE_AMOUNT_WAD / WAD;
-
-        int24 initTick = TickMath.getTickAtSqrtPrice(initializedSqrtPriceX96);
-
-        // mint with current tick in order to have liquidity for swap
-        (uint256 tokenId,, uint256 amount0, uint256 amount1) = NONFUNGIBLE_POSITION_MANAGER.mint(
-            INonfungiblePositionManager.MintParams({
-                token0: token0,
-                token1: token1,
-                fee: FEE_TIER,
-                tickLower: initTick - tickSpacing,
-                tickUpper: initTick + tickSpacing,
-                amount0Desired: rebalanceAmount0,
-                amount1Desired: rebalanceAmount1,
-                amount0Min: 1, // just need to make sure there is at least 1 liquidity for swap
-                amount1Min: 1, // just need to make sure there is at least 1 liquidity for swap
-                recipient: address(this),
-                deadline: block.timestamp + 180 // 3 minutes
-             })
-        );
-        // transfer the liquidity used for rebalancing to the locker as well
-        NONFUNGIBLE_POSITION_MANAGER.safeTransferFrom(address(this), address(CUSTOM_V3_LOCKER), tokenId);
-        CUSTOM_V3_LOCKER.register(tokenId, amount0, amount1, integratorFeeReceiver, recipient);
-
-        // swap to rebalance the price
-        uint256 amountIn = rebalanceAmount0 * MAX_SLIPPAGE_WAD / WAD; // just swap with 15% of the amount0 used for rebalancing to trigger price rebalancing
-        ERC20(token0).safeApprove(address(ROUTER), amountIn);
-        ROUTER.exactInputSingle(
-            IBaseSwapRouter02.ExactInputSingleParams({
-                tokenIn: token0,
-                tokenOut: token1,
-                fee: FEE_TIER,
-                recipient: address(this),
-                amountIn: amountIn,
-                amountOutMinimum: rebalanceAmount1 * MAX_SLIPPAGE_WAD / WAD,
-                sqrtPriceLimitX96: targetSqrtPriceX96
-            })
+        bool zeroForOne = targetSqrtPriceX96 < initializedSqrtPriceX96;
+        address swapToken = zeroForOne ? token0 : token1;
+        
+        // Calculate proper price limit based on direction
+        uint160 sqrtPriceLimitX96;
+        if (zeroForOne) {
+            // Price is decreasing, limit must be between target and MIN
+            sqrtPriceLimitX96 = targetSqrtPriceX96 > TickMath.MIN_SQRT_PRICE + 1 
+                ? targetSqrtPriceX96 
+                : TickMath.MIN_SQRT_PRICE + 1;
+        } else {
+            // Price is increasing, limit must be between target and MAX
+            sqrtPriceLimitX96 = targetSqrtPriceX96 < TickMath.MAX_SQRT_PRICE - 1 
+                ? targetSqrtPriceX96 
+                : TickMath.MAX_SQRT_PRICE - 1;
+        }
+        
+        // Swap minimal amount to move price
+        IUniswapV3Pool(pool).swap(
+            address(this),
+            zeroForOne,
+            1, // minimal amount  
+            sqrtPriceLimitX96,
+            ""
         );
 
-        balance0AfterSwap = balance0 - rebalanceAmount0;
-        balance1AfterSwap = balance1 - rebalanceAmount1;
+        balance0AfterSwap = ERC20(token0).balanceOf(address(this));
+        balance1AfterSwap = ERC20(token1).balanceOf(address(this));
     }
 
     function _getDivisibleTick(int24 tick, int24 tickSpacing, bool isUpper) internal pure returns (int24 finalTick) {
@@ -277,4 +265,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
     function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
         return this.onERC721Received.selector;
     }
+
+    // Required for manual swap
+    fallback() external payable {}
 }
