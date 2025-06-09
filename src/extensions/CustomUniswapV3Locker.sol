@@ -11,6 +11,10 @@ import { ICustomUniswapV3Locker } from "src/extensions/interfaces/ICustomUniswap
 import { CustomUniswapV3Migrator } from "src/extensions/CustomUniswapV3Migrator.sol";
 import { ImmutableAirlock } from "src/base/ImmutableAirlock.sol";
 
+/**
+ * @author ant
+ * @notice An extension built on top of CustomUniswapV3Migrator to enable real-time fee streaming by escrowing LP for a fixed period
+ */
 contract CustomUniswapV3Locker is ICustomUniswapV3Locker, Ownable, ImmutableAirlock, IERC721Receiver {
     using SafeTransferLib for ERC20;
     using FixedPointMathLib for uint256;
@@ -39,15 +43,15 @@ contract CustomUniswapV3Locker is ICustomUniswapV3Locker, Ownable, ImmutableAirl
     constructor(
         address airlock_,
         IUniswapV3Factory factory_,
+        INonfungiblePositionManager nonfungiblePositionManager_,
         CustomUniswapV3Migrator migrator_,
         address owner_,
-        address dopplerFeeReceiver_,
-        INonfungiblePositionManager nonfungiblePositionManager_
+        address dopplerFeeReceiver_
     ) Ownable(owner_) ImmutableAirlock(airlock_) {
         FACTORY = factory_;
+        NONFUNGIBLE_POSITION_MANAGER = nonfungiblePositionManager_;
         MIGRATOR = migrator_;
         DOPPLER_FEE_RECEIVER = dopplerFeeReceiver_;
-        NONFUNGIBLE_POSITION_MANAGER = nonfungiblePositionManager_;
     }
 
     /**
@@ -82,9 +86,9 @@ contract CustomUniswapV3Locker is ICustomUniswapV3Locker, Ownable, ImmutableAirl
 
     function harvest(
         uint256 tokenId
-    ) public {
+    ) public returns (uint256 collectedAmount0, uint256 collectedAmount1) {
         // set amount0Max and amount1Max to uint256.max to collect all fees
-        (uint256 collectedAmount0, uint256 collectedAmount1) = NONFUNGIBLE_POSITION_MANAGER.collect(
+        (collectedAmount0, collectedAmount1) = NONFUNGIBLE_POSITION_MANAGER.collect(
             INonfungiblePositionManager.CollectParams({
                 tokenId: tokenId,
                 recipient: address(this),

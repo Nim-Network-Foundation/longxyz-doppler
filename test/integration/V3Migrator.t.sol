@@ -14,12 +14,13 @@ import { PoolId } from "@v4-core/types/PoolId.sol";
 import { Currency } from "@v4-core/types/Currency.sol";
 import { IHooks } from "@v4-core/interfaces/IHooks.sol";
 import { StateLibrary } from "@v4-core/libraries/StateLibrary.sol";
+import { IUniswapV3Pool } from "@v3-core/interfaces/IUniswapV3Pool.sol";
 import { BaseTest } from "test/shared/BaseTest.sol";
 import { MineV4Params, mineV4 } from "test/shared/AirlockMiner.sol";
 import { ILiquidityMigrator } from "src/interfaces/ILiquidityMigrator.sol";
 import { Airlock, ModuleState, CreateParams } from "src/Airlock.sol";
 import { DopplerDeployer, UniswapV4Initializer, IPoolInitializer } from "src/UniswapV4Initializer.sol";
-import { CustomUniswapV3Migrator, ISwapRouter02 } from "src/extensions/CustomUniswapV3Migrator.sol";
+import { CustomUniswapV3Migrator, IBaseSwapRouter02 } from "src/extensions/CustomUniswapV3Migrator.sol";
 import { TokenFactory, ITokenFactory } from "src/TokenFactory.sol";
 import { GovernanceFactory, IGovernanceFactory } from "src/GovernanceFactory.sol";
 import { Doppler } from "src/Doppler.sol";
@@ -41,7 +42,7 @@ contract V3MigratorTest is BaseTest {
     address constant INTEGRATOR_FEE_RECEIVER = address(0x1111);
 
     INonfungiblePositionManager public NFPM;
-    ISwapRouter02 public ROUTER_02;
+    IBaseSwapRouter02 public ROUTER_02;
 
     CustomUniswapV3Migrator public migrator;
     Airlock public airlock;
@@ -64,7 +65,7 @@ contract V3MigratorTest is BaseTest {
         deployer = new DopplerDeployer(manager);
         initializer = new UniswapV4Initializer(address(airlock), manager, deployer);
         NFPM = INonfungiblePositionManager(UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER_BASE);
-        ROUTER_02 = ISwapRouter02(UNISWAP_V3_ROUTER_02_BASE);
+        ROUTER_02 = IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE);
         migrator =
             new CustomUniswapV3Migrator(address(airlock), NFPM, ROUTER_02, LOCKER_OWNER, DOPPLER_FEE_RECEIVER, FEE_TIER);
         tokenFactory = new TokenFactory(address(airlock));
@@ -103,7 +104,10 @@ contract V3MigratorTest is BaseTest {
             DEFAULT_FEE,
             DEFAULT_TICK_SPACING
         );
-        bytes memory liquidityMigratorData = abi.encode(DEFAULT_START_TICK, DEFAULT_END_TICK, INTEGRATOR_FEE_RECEIVER);
+
+        // int24 customStartTick = 167_000;
+        // int24 customEndTick = 195_000;
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
 
         MineV4Params memory params = MineV4Params({
             airlock: address(airlock),
@@ -136,6 +140,10 @@ contract V3MigratorTest is BaseTest {
         });
 
         (, address pool, address governance, address timelock, address migrationPool) = airlock.create(createParams);
+
+        (uint160 currentSqrtPriceX96,,,,,,) = IUniswapV3Pool(migrationPool).slot0();
+        console.log("Current sqrt price:", currentSqrtPriceX96);
+        console.log("Current tick:", TickMath.getTickAtSqrtPrice(currentSqrtPriceX96));
 
         // Perform enough swaps to reach minimum proceeds
         (Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing, IHooks hooks) =
@@ -190,11 +198,12 @@ contract V3MigratorTest is BaseTest {
         console.log("Ending time:", Doppler(payable(hook)).endingTime());
         console.log("Warp-ed timestamp:", block.timestamp);
 
-        // goToEndingTime();
         airlock.migrate(asset);
 
         assertEq(
-            ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())), 1, "Locker should have one token"
+            ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())),
+            2,
+            "Locker should have two tokens after accounting rebalancing"
         );
         // assertEq(
         //     ERC721(address(NFPM)).ownerOf(1),

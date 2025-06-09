@@ -43,7 +43,7 @@ interface ICustomUniswapV3Locker {
 
     function harvest(
         uint256 tokenId
-    ) external;
+    ) external returns (uint256 collectedAmount0, uint256 collectedAmount1);
 
     function unlock(
         uint256 tokenId

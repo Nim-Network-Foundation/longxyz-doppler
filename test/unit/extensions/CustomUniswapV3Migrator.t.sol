@@ -7,8 +7,7 @@ import { TickMath } from "@v4-core/libraries/TickMath.sol";
 import { ERC20 } from "@openzeppelin/token/ERC20/ERC20.sol";
 import { CustomUniswapV3Migrator } from "src/extensions/CustomUniswapV3Migrator.sol";
 import { INonfungiblePositionManager } from "src/extensions/interfaces/INonfungiblePositionManager.sol";
-import { IUniswapV3Factory, ISwapRouter02 } from "src/extensions/CustomUniswapV3Migrator.sol";
-import { MigrationMath } from "src/UniswapV2Migrator.sol";
+import { IUniswapV3Factory, IBaseSwapRouter02 } from "src/extensions/CustomUniswapV3Migrator.sol";
 import { SenderNotAirlock } from "src/base/ImmutableAirlock.sol";
 import {
     UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER_BASE,
@@ -28,8 +27,6 @@ contract CustomUniswapV3MigratorTest is Test {
     address constant INTEGRATOR_FEE_RECEIVER = address(0x1111);
     int24 constant DEFAULT_LOWER_TICK = 0;
     int24 constant DEFAULT_UPPER_TICK = 200;
-    // int24 constant DEFAULT_LOWER_TICK = 167_520;
-    // int24 constant DEFAULT_UPPER_TICK = 200_040;
 
     bytes public liquidityMigratorData = abi.encode(DEFAULT_LOWER_TICK, DEFAULT_UPPER_TICK, INTEGRATOR_FEE_RECEIVER);
 
@@ -38,7 +35,7 @@ contract CustomUniswapV3MigratorTest is Test {
         migrator = new CustomUniswapV3Migrator(
             address(this), // airlock
             INonfungiblePositionManager(UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER_BASE),
-            ISwapRouter02(UNISWAP_V3_ROUTER_02_BASE),
+            IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE),
             LOCKER_OWNER,
             DOPPLER_FEE_RECEIVER,
             FEE_TIER
