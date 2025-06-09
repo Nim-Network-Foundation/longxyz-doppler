@@ -23,7 +23,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
     /// @dev Constant used to increase precision during calculations
     uint256 constant WAD = 1 ether;
     uint256 constant MAX_SLIPPAGE_WAD = 0.15 ether; // 15% slippage
-    uint256 constant REBALANCE_AMOUNT_WAD = 0.00001 ether; // 0.001% of liquidity used for rebalancing
+    uint256 constant REBALANCE_AMOUNT_WAD = 0.000001 ether; // 0.0001% of liquidity used for rebalancing
 
     INonfungiblePositionManager public immutable NONFUNGIBLE_POSITION_MANAGER;
     IUniswapV3Factory public immutable FACTORY;
