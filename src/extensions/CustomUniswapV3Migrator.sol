@@ -84,7 +84,8 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         int24 minTick = TickMath.minUsableTick(tickSpacing) + tickSpacing;
         int24 maxTick = TickMath.maxUsableTick(tickSpacing) - tickSpacing;
         uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(asset == token0 ? minTick : maxTick);
-        IUniswapV3Pool(pool).initialize(sqrtPriceX96);
+        // won't revert even failed to initialize
+        try IUniswapV3Pool(pool).initialize(sqrtPriceX96) { } catch { }
 
         return pool;
     }
@@ -165,7 +166,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
                 amount0Min: balance0 * (WAD - MAX_SLIPPAGE_WAD) / WAD,
                 amount1Min: balance1 * (WAD - MAX_SLIPPAGE_WAD) / WAD,
                 recipient: address(this),
-                deadline: block.timestamp + 3600 // 1 hour
+                deadline: block.timestamp + 180 // 3 minutes
              })
         );
 
@@ -207,7 +208,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
                 amount0Min: 1, // just need to make sure there is at least 1 liquidity for swap
                 amount1Min: 1, // just need to make sure there is at least 1 liquidity for swap
                 recipient: address(this),
-                deadline: block.timestamp + 3600 // 1 hour
+                deadline: block.timestamp + 180 // 3 minutes
              })
         );
         // transfer the liquidity used for rebalancing to the locker as well
@@ -215,7 +216,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         CUSTOM_V3_LOCKER.register(tokenId, amount0, amount1, integratorFeeReceiver, recipient);
 
         // swap to rebalance the price
-        uint256 amountIn = rebalanceAmount0 * MAX_SLIPPAGE_WAD / WAD; // just swap with 10% of the amount0 used for rebalancing to trigger price rebalancing
+        uint256 amountIn = rebalanceAmount0 * MAX_SLIPPAGE_WAD / WAD; // just swap with 15% of the amount0 used for rebalancing to trigger price rebalancing
         ERC20(token0).safeApprove(address(ROUTER), amountIn);
         ROUTER.exactInputSingle(
             IBaseSwapRouter02.ExactInputSingleParams({
