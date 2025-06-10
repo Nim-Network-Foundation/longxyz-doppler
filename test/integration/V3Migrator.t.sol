@@ -89,15 +89,7 @@ contract V3MigratorTest is BaseTest {
         address integrator = _setupContracts();
         bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
 
-        (
-            bytes32 salt,
-            address hook,
-            address asset,
-            address pool,
-            address governance,
-            address timelock,
-            address migrationPool
-        ) = _createPool(integrator, liquidityMigratorData);
+        (, address hook, address asset,,,, address migrationPool) = _createPool(integrator, liquidityMigratorData);
 
         (uint160 currentSqrtPriceX96,,,,,,) = IUniswapV3Pool(migrationPool).slot0();
         console.log("Current sqrt price:", currentSqrtPriceX96);
@@ -123,15 +115,7 @@ contract V3MigratorTest is BaseTest {
         address integrator = _setupContracts();
         bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
 
-        (
-            bytes32 salt,
-            address hook,
-            address asset,
-            address pool,
-            address governance,
-            address timelock,
-            address migrationPool
-        ) = _createPool(integrator, liquidityMigratorData);
+        (, address hook, address asset,,,,) = _createPool(integrator, liquidityMigratorData);
 
         // Execute minimal swaps
         _executeMinimalSwapsToMinProceeds(hook);
@@ -160,15 +144,7 @@ contract V3MigratorTest is BaseTest {
 
         bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
 
-        (
-            bytes32 salt,
-            address hook,
-            address asset,
-            address pool,
-            address governance,
-            address timelock,
-            address migrationPool
-        ) = _createPool(integrator, liquidityMigratorData);
+        (,, address asset,,,, address migrationPool) = _createPool(integrator, liquidityMigratorData);
 
         // Verify pool was created during initialization
         address weth = address(testMigrator.WETH());
@@ -183,15 +159,7 @@ contract V3MigratorTest is BaseTest {
         address customIntegratorFeeReceiver = makeAddr("customIntegratorFeeReceiver");
         bytes memory liquidityMigratorData = abi.encode(customIntegratorFeeReceiver);
 
-        (
-            bytes32 salt,
-            address hook,
-            address asset,
-            address pool,
-            address governance,
-            address timelock,
-            address migrationPool
-        ) = _createPool(integrator, liquidityMigratorData);
+        (, address hook, address asset,,,, address migrationPool) = _createPool(integrator, liquidityMigratorData);
 
         // Verify fee receiver was registered
         assertEq(
@@ -389,15 +357,7 @@ contract V3MigratorTest is BaseTest {
         (address integrator, CustomUniswapV3Migrator testMigrator) = _setupContractsWithCustomMigrator(feeTier);
         bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
 
-        (
-            bytes32 salt,
-            address hook,
-            address asset,
-            address pool,
-            address governance,
-            address timelock,
-            address migrationPool
-        ) = _createPool(integrator, liquidityMigratorData);
+        (, address hook, address asset,,,, address migrationPool) = _createPool(integrator, liquidityMigratorData);
 
         address weth = address(testMigrator.WETH());
         address token0 = asset < weth ? asset : weth;
@@ -429,15 +389,7 @@ contract V3MigratorTest is BaseTest {
         address integrator = _setupContracts();
         bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
 
-        (
-            bytes32 salt,
-            address hook,
-            address asset,
-            address pool,
-            address governance,
-            address timelock,
-            address migrationPool
-        ) = _createPool(integrator, liquidityMigratorData);
+        (, address hook, address asset,,,,) = _createPool(integrator, liquidityMigratorData);
 
         // Execute fuzzed swaps
         _executeFuzzedSwaps(hook, swapAmount1, swapAmount2, swapAmount3);
@@ -467,15 +419,7 @@ contract V3MigratorTest is BaseTest {
         address integrator = _setupContracts();
         bytes memory liquidityMigratorData = abi.encode(feeReceiver);
 
-        (
-            bytes32 salt,
-            address hook,
-            address asset,
-            address pool,
-            address governance,
-            address timelock,
-            address migrationPool
-        ) = _createPool(integrator, liquidityMigratorData);
+        (, address hook, address asset,,,, address migrationPool) = _createPool(integrator, liquidityMigratorData);
 
         // Verify fee receiver was registered
         assertEq(migrator.poolFeeReceivers(migrationPool), feeReceiver, "Fee receiver should match");
@@ -502,15 +446,7 @@ contract V3MigratorTest is BaseTest {
         address integrator = _setupContracts();
         bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
 
-        (
-            bytes32 salt,
-            address hook,
-            address asset,
-            address pool,
-            address governance,
-            address timelock,
-            address migrationPool
-        ) = _createPool(integrator, liquidityMigratorData);
+        (, address hook, address asset,,,,) = _createPool(integrator, liquidityMigratorData);
 
         _executeSwapsWithDelays(hook, swapDelay1, swapDelay2);
 

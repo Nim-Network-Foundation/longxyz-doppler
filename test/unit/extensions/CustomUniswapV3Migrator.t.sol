@@ -155,12 +155,13 @@ contract CustomUniswapV3MigratorTest is Test {
         TestERC20 token0 = new TestERC20(type(uint256).max);
         TestERC20 token1 = new TestERC20(type(uint256).max);
 
-        address factory = address(testMigrator.FACTORY());
+        address factory_ = address(testMigrator.FACTORY());
         (address tokenA, address tokenB) =
             address(token0) < address(token1) ? (address(token0), address(token1)) : (address(token1), address(token0));
 
-        IUniswapV3Factory(factory).createPool(tokenA, tokenB, testFeeTier);
-        address pool = IUniswapV3Factory(factory).getPool(tokenA, tokenB, testFeeTier);
+        IUniswapV3Factory(factory_).createPool(tokenA, tokenB, testFeeTier);
+        address pool = IUniswapV3Factory(factory_).getPool(tokenA, tokenB, testFeeTier);
+        assertNotEq(pool, address(0), "Pool should have been created");
 
         testMigrator.initialize(tokenA, tokenB, liquidityMigratorData);
 
@@ -207,10 +208,10 @@ contract CustomUniswapV3MigratorTest is Test {
         TestERC20 token0 = new TestERC20(type(uint256).max);
         TestERC20 token1 = new TestERC20(type(uint256).max);
 
-        address factory = address(testMigrator.FACTORY());
+        address factory_ = address(testMigrator.FACTORY());
         (address tokenA, address tokenB) =
             address(token0) < address(token1) ? (address(token0), address(token1)) : (address(token1), address(token0));
-        IUniswapV3Factory(factory).createPool(tokenA, tokenB, testFeeTier);
+        IUniswapV3Factory(factory_).createPool(tokenA, tokenB, testFeeTier);
 
         testMigrator.initialize(tokenA, tokenB, liquidityMigratorData);
 
