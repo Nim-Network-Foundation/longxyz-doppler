@@ -49,6 +49,7 @@ function mineV4(
         bool isToken0,
         uint256 numPDSlugs,
         uint24 lpFee,
+        int24 tickSpacing
     ) = abi.decode(
         params.poolInitializerData,
         (uint256, uint256, uint256, uint256, int24, int24, uint256, int24, bool, uint256, uint24, int24)
@@ -104,10 +105,8 @@ function mineV4(
         )
     );
 
-    address deployer = address(params.poolInitializer.deployer());
-
     for (uint256 salt; salt < 200_000; ++salt) {
-        address hook = computeCreate2Address(bytes32(salt), dopplerInitHash, deployer);
+        address hook = computeCreate2Address(bytes32(salt), dopplerInitHash, address(params.poolInitializer.deployer()));
         address asset = computeCreate2Address(bytes32(salt), tokenInitHash, address(params.tokenFactory));
 
         if (
