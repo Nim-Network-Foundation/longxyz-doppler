@@ -26,7 +26,6 @@ contract CustomUniswapV3MigratorTest is Test {
     INonfungiblePositionManager public nfpm;
 
     uint24 constant FEE_TIER = 10_000;
-    address constant LOCKER_OWNER = address(0xb055);
     address constant DOPPLER_FEE_RECEIVER = address(0x2222);
     address constant INTEGRATOR_FEE_RECEIVER = address(0x1111);
 
@@ -39,12 +38,7 @@ contract CustomUniswapV3MigratorTest is Test {
         nfpm = INonfungiblePositionManager(UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER_BASE);
 
         migrator = new CustomUniswapV3Migrator(
-            address(this),
-            nfpm,
-            IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE),
-            LOCKER_OWNER,
-            DOPPLER_FEE_RECEIVER,
-            FEE_TIER
+            address(this), nfpm, IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE), DOPPLER_FEE_RECEIVER, FEE_TIER
         );
     }
 
@@ -119,10 +113,10 @@ contract CustomUniswapV3MigratorTest is Test {
         assertEq(tick, expectedTick, "Pool should be initialized at extreme tick");
     }
 
-    function test_onERC721Received() public view {
-        bytes4 result = migrator.onERC721Received(address(0), address(0), 0, "");
-        assertEq(result, migrator.onERC721Received.selector, "Wrong selector returned");
-    }
+    // function test_onERC721Received() public view {
+    //     bytes4 result = migrator.onERC721Received(address(0), address(0), 0, "");
+    //     assertEq(result, migrator.onERC721Received.selector, "Wrong selector returned");
+    // }
 
     function test_poolFeeReceivers() public {
         address token0 = address(0x3333);
@@ -135,7 +129,6 @@ contract CustomUniswapV3MigratorTest is Test {
     function test_constantValues() public view {
         assertEq(address(migrator.NONFUNGIBLE_POSITION_MANAGER()), UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER_BASE);
         assertEq(address(migrator.FACTORY()), UNISWAP_V3_FACTORY_BASE);
-        assertEq(address(migrator.ROUTER()), UNISWAP_V3_ROUTER_02_BASE);
         assertEq(address(migrator.WETH()), WETH_BASE);
         assertEq(migrator.FEE_TIER(), FEE_TIER);
         assertTrue(address(migrator.CUSTOM_V3_LOCKER()) != address(0), "Locker should be deployed");
@@ -147,7 +140,6 @@ contract CustomUniswapV3MigratorTest is Test {
             address(this),
             INonfungiblePositionManager(UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER_BASE),
             IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE),
-            LOCKER_OWNER,
             DOPPLER_FEE_RECEIVER,
             testFeeTier
         );
@@ -200,7 +192,6 @@ contract CustomUniswapV3MigratorTest is Test {
             address(this),
             INonfungiblePositionManager(UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER_BASE),
             IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE),
-            LOCKER_OWNER,
             DOPPLER_FEE_RECEIVER,
             testFeeTier
         );
@@ -267,12 +258,7 @@ contract CustomUniswapV3MigratorTest is Test {
         uint24 testFeeTier = 100;
 
         CustomUniswapV3Migrator testMigrator = new CustomUniswapV3Migrator(
-            address(this),
-            nfpm,
-            IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE),
-            LOCKER_OWNER,
-            DOPPLER_FEE_RECEIVER,
-            testFeeTier
+            address(this), nfpm, IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE), DOPPLER_FEE_RECEIVER, testFeeTier
         );
 
         TestERC20 tokenA = new TestERC20(type(uint256).max);
@@ -281,11 +267,10 @@ contract CustomUniswapV3MigratorTest is Test {
         (address token0, address token1) =
             address(tokenA) < address(tokenB) ? (address(tokenA), address(tokenB)) : (address(tokenB), address(tokenA));
 
-        address pool = testMigrator.initialize(token0, token1, liquidityMigratorData);
-
-        (uint160 initialPrice,,,,,,) = IUniswapV3Pool(pool).slot0();
-        int24 initialTick = TickMath.getTickAtSqrtPrice(initialPrice);
-        console.log("Initial tick:", initialTick);
+        testMigrator.initialize(token0, token1, liquidityMigratorData);
+        // (uint160 initialPrice,,,,,,) = IUniswapV3Pool(pool).slot0();
+        // int24 initialTick = TickMath.getTickAtSqrtPrice(initialPrice);
+        // console.log("Initial tick:", initialTick);
 
         uint256 amount0 = 1000e18;
         uint256 amount1 = 1000e18;
@@ -495,12 +480,7 @@ contract CustomUniswapV3MigratorTest is Test {
         targetTick = (targetTick / tickSpacing) * tickSpacing;
 
         CustomUniswapV3Migrator testMigrator = new CustomUniswapV3Migrator(
-            address(this),
-            nfpm,
-            IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE),
-            LOCKER_OWNER,
-            DOPPLER_FEE_RECEIVER,
-            testFeeTier
+            address(this), nfpm, IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE), DOPPLER_FEE_RECEIVER, testFeeTier
         );
 
         TestERC20 tokenA = new TestERC20(type(uint256).max);

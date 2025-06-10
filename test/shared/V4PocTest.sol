@@ -257,11 +257,11 @@ contract V4PocTest is DopplerLensTest {
         }
 
         require(hook.earlyExit(), "didn't migrate as expected");
-        vm.prank(hook.initializer());
 
         uint256 tokenMigrateB4 = IERC20(asset).balanceOf(address(0xbeef));
         uint256 ethMigrateB4 = address(0xbeef).balance;
 
+        vm.prank(hook.initializer());
         (uint160 migrationSqrtPriceX96,, uint128 fees0,,, uint128 fees1,) = hook.migrate(address(0xbeef));
 
         uint256 tokenMigrated = IERC20(asset).balanceOf(address(0xbeef));

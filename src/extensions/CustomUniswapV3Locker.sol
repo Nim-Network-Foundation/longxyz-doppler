@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import { Ownable } from "@openzeppelin/access/Ownable.sol";
 import { SafeTransferLib, ERC20 } from "@solmate/utils/SafeTransferLib.sol";
 import { FixedPointMathLib } from "@solmate/utils/FixedPointMathLib.sol";
 import { IERC721Receiver } from "@openzeppelin/token/ERC721/IERC721Receiver.sol";
-import { IUniswapV3Factory } from "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import { INonfungiblePositionManager } from "src/extensions/interfaces/INonfungiblePositionManager.sol";
 import { ICustomUniswapV3Locker } from "src/extensions/interfaces/ICustomUniswapV3Locker.sol";
 import { CustomUniswapV3Migrator } from "src/extensions/CustomUniswapV3Migrator.sol";
@@ -15,21 +13,20 @@ import { ImmutableAirlock } from "src/base/ImmutableAirlock.sol";
  * @author ant
  * @notice An extension built on top of CustomUniswapV3Migrator to enable real-time fee streaming by escrowing LP for a fixed period
  */
-contract CustomUniswapV3Locker is ICustomUniswapV3Locker, Ownable, ImmutableAirlock, IERC721Receiver {
+contract CustomUniswapV3Locker is ICustomUniswapV3Locker, IERC721Receiver {
     using SafeTransferLib for ERC20;
     using FixedPointMathLib for uint256;
     using FixedPointMathLib for uint160;
 
     uint256 constant ONE_YEAR = 365 days;
-
-    /// @notice Address of the Uniswap V3 factory
-    IUniswapV3Factory public immutable FACTORY;
-
-    /// @notice Address of the Uniswap V3 migrator
-    CustomUniswapV3Migrator public immutable MIGRATOR;
+    uint256 constant DOPPLER_FEE_WAD = 0.05 ether;
+    uint256 constant WAD = 1 ether;
 
     /// @notice Address of the Uniswap V3 nonfungible position manager
     INonfungiblePositionManager public immutable NONFUNGIBLE_POSITION_MANAGER;
+
+    /// @notice Address of the Uniswap V3 migrator
+    CustomUniswapV3Migrator public immutable MIGRATOR;
 
     address public immutable DOPPLER_FEE_RECEIVER;
 
@@ -41,14 +38,10 @@ contract CustomUniswapV3Locker is ICustomUniswapV3Locker, Ownable, ImmutableAirl
      * @param dopplerFeeReceiver_ Address of the doppler fee receiver
      */
     constructor(
-        address airlock_,
-        IUniswapV3Factory factory_,
         INonfungiblePositionManager nonfungiblePositionManager_,
         CustomUniswapV3Migrator migrator_,
-        address owner_,
         address dopplerFeeReceiver_
-    ) Ownable(owner_) ImmutableAirlock(airlock_) {
-        FACTORY = factory_;
+    ) {
         NONFUNGIBLE_POSITION_MANAGER = nonfungiblePositionManager_;
         MIGRATOR = migrator_;
         DOPPLER_FEE_RECEIVER = dopplerFeeReceiver_;
@@ -71,6 +64,7 @@ contract CustomUniswapV3Locker is ICustomUniswapV3Locker, Ownable, ImmutableAirl
     ) external {
         require(msg.sender == address(MIGRATOR), SenderNotMigrator());
         require(positionStates[tokenId].minUnlockDate == 0, PoolAlreadyInitialized());
+        require(integratorFeeReceiver != address(0), ZeroFeeReceiverAddress());
 
         address owner = NONFUNGIBLE_POSITION_MANAGER.ownerOf(tokenId);
         require(owner == address(this), NFTPositionNotFound(tokenId));
@@ -121,8 +115,8 @@ contract CustomUniswapV3Locker is ICustomUniswapV3Locker, Ownable, ImmutableAirl
         address integratorFeeReceiver = positionStates[tokenId].integratorFeeReceiver;
 
         // distribute fees - 95% to integratorFeeReceiver, 5% to DOPPLER_FEE_RECEIVER
-        uint256 dopplerFee0 = collectedAmount0 * 5 / 100;
-        uint256 dopplerFee1 = collectedAmount1 * 5 / 100;
+        uint256 dopplerFee0 = collectedAmount0 * DOPPLER_FEE_WAD / WAD;
+        uint256 dopplerFee1 = collectedAmount1 * DOPPLER_FEE_WAD / WAD;
 
         ERC20(token0).safeTransfer(integratorFeeReceiver, collectedAmount0 - dopplerFee0);
         ERC20(token1).safeTransfer(integratorFeeReceiver, collectedAmount1 - dopplerFee1);

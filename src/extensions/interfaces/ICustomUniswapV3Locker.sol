@@ -33,6 +33,9 @@ interface ICustomUniswapV3Locker {
     /// @notice Thrown when the minimum unlock date has not been reached
     error MinUnlockDateNotReached();
 
+    /// @notice Thrown when the integrator fee receiver is the zero address
+    error ZeroFeeReceiverAddress();
+
     function register(
         uint256 tokenId,
         uint256 amount0,

@@ -40,7 +40,6 @@ contract V3MigratorTest is BaseTest {
     using StateLibrary for IPoolManager;
 
     uint24 constant FEE_TIER = 10_000;
-    address constant LOCKER_OWNER = address(0xb055);
     address constant DOPPLER_FEE_RECEIVER = address(0x2222);
     address constant INTEGRATOR_FEE_RECEIVER = address(0x1111);
 
@@ -91,9 +90,9 @@ contract V3MigratorTest is BaseTest {
 
         (, address hook, address asset,,,, address migrationPool) = _createPool(integrator, liquidityMigratorData);
 
-        (uint160 currentSqrtPriceX96,,,,,,) = IUniswapV3Pool(migrationPool).slot0();
-        console.log("Current sqrt price:", currentSqrtPriceX96);
-        console.log("Current tick:", TickMath.getTickAtSqrtPrice(currentSqrtPriceX96));
+        // (uint160 currentSqrtPriceX96,,,,,,) = IUniswapV3Pool(migrationPool).slot0();
+        // console.log("Current sqrt price:", currentSqrtPriceX96);
+        // console.log("Current tick:", TickMath.getTickAtSqrtPrice(currentSqrtPriceX96));
 
         // Perform enough swaps to reach minimum proceeds
         _executeSwapsToMinProceeds(hook);
@@ -188,8 +187,7 @@ contract V3MigratorTest is BaseTest {
         initializer = new UniswapV4Initializer(address(airlock), manager, deployer);
         NFPM = INonfungiblePositionManager(UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER_BASE);
         ROUTER_02 = IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE);
-        migrator =
-            new CustomUniswapV3Migrator(address(airlock), NFPM, ROUTER_02, LOCKER_OWNER, DOPPLER_FEE_RECEIVER, FEE_TIER);
+        migrator = new CustomUniswapV3Migrator(address(airlock), NFPM, ROUTER_02, DOPPLER_FEE_RECEIVER, FEE_TIER);
         tokenFactory = new TokenFactory(address(airlock));
         governanceFactory = new GovernanceFactory(address(airlock));
 
@@ -206,8 +204,7 @@ contract V3MigratorTest is BaseTest {
         initializer = new UniswapV4Initializer(address(airlock), manager, deployer);
         NFPM = INonfungiblePositionManager(UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER_BASE);
         ROUTER_02 = IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE);
-        customMigrator =
-            new CustomUniswapV3Migrator(address(airlock), NFPM, ROUTER_02, LOCKER_OWNER, DOPPLER_FEE_RECEIVER, feeTier);
+        customMigrator = new CustomUniswapV3Migrator(address(airlock), NFPM, ROUTER_02, DOPPLER_FEE_RECEIVER, feeTier);
         tokenFactory = new TokenFactory(address(airlock));
         governanceFactory = new GovernanceFactory(address(airlock));
 

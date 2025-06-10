@@ -26,7 +26,6 @@ import { console } from "forge-std/console.sol";
 
 contract CustomUniswapV3LockerTest is Test {
     uint24 constant FEE_TIER = 10_000;
-    address constant LOCKER_OWNER = address(0xb055);
     address constant DOPPLER_FEE_RECEIVER = address(0x2222);
     address constant INTEGRATOR_FEE_RECEIVER = address(0x1111);
     int24 constant DEFAULT_LOWER_TICK = 0;
@@ -48,7 +47,6 @@ contract CustomUniswapV3LockerTest is Test {
     TestERC20 public tokenBar;
 
     address public timelock = makeAddr("timelock");
-    address public alice = makeAddr("alice");
 
     function setUp() public {
         vm.createSelectFork(vm.envString("BASE_MAINNET_RPC_URL"), 31_118_046);
@@ -60,18 +58,16 @@ contract CustomUniswapV3LockerTest is Test {
             address(this), // airlock
             NFPM,
             ROUTER_02,
-            LOCKER_OWNER,
             DOPPLER_FEE_RECEIVER,
             FEE_TIER
         );
-        locker =
-            new CustomUniswapV3Locker(address(airlock), FACTORY, NFPM, migrator, address(0xb055), DOPPLER_FEE_RECEIVER);
+        locker = new CustomUniswapV3Locker(NFPM, migrator, DOPPLER_FEE_RECEIVER);
     }
 
     function test_constructor() public view {
-        assertEq(address(locker.FACTORY()), UNISWAP_V3_FACTORY_BASE);
         assertEq(address(locker.NONFUNGIBLE_POSITION_MANAGER()), UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER_BASE);
         assertEq(address(locker.MIGRATOR()), address(migrator));
+        assertEq(locker.DOPPLER_FEE_RECEIVER(), DOPPLER_FEE_RECEIVER);
     }
 
     function test_register_WithLockUpPeriod_InitializesPool()
@@ -129,7 +125,6 @@ contract CustomUniswapV3LockerTest is Test {
 
         (,, address token0, address token1,,,,,,,,) = NFPM.positions(tokenId);
 
-        // alice swap in the pool
         uint160 priceLimit = TickMath.getSqrtPriceAtTick(
             token0 == address(WETH_BASE)
                 ? TickMath.maxUsableTick(FACTORY.feeAmountTickSpacing(FEE_TIER))
