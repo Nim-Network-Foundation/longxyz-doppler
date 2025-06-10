@@ -387,4 +387,182 @@ contract CustomUniswapV3MigratorTest is Test {
         uint256 balance = IERC721(address(nfpm)).balanceOf(address(locker));
         assertGt(balance, 0, "Locker should have NFT");
     }
+
+    function testFuzz_initialize_WithVariousAddresses(
+        address asset,
+        address numeraire,
+        address integratorFeeReceiver
+    ) public {
+        vm.assume(asset != address(0));
+        vm.assume(integratorFeeReceiver != address(0));
+        vm.assume(asset != numeraire);
+
+        vm.assume(uint160(asset) > 255);
+        vm.assume(uint160(numeraire) > 255 || numeraire == address(0));
+        vm.assume(uint160(integratorFeeReceiver) > 255);
+
+        bytes memory fuzzData = abi.encode(integratorFeeReceiver);
+
+        address pool = migrator.initialize(asset, numeraire, fuzzData);
+
+        // Verify pool was created/found
+        address expectedNumeraire = numeraire == address(0) ? address(migrator.WETH()) : numeraire;
+        (address token0, address token1) =
+            asset < expectedNumeraire ? (asset, expectedNumeraire) : (expectedNumeraire, asset);
+
+        assertEq(pool, factory.getPool(token0, token1, FEE_TIER), "Pool address mismatch");
+        assertEq(migrator.poolFeeReceivers(pool), integratorFeeReceiver, "Fee receiver mismatch");
+    }
+
+    function testFuzz_migrate_WithVariousPrices(
+        uint160 targetSqrtPriceX96
+    ) public {
+        uint256 bounded = bound(
+            uint256(targetSqrtPriceX96),
+            uint256(79_228_162_514_264_337_593_543_950_336) / 100, // 0.01x price
+            uint256(79_228_162_514_264_337_593_543_950_336) * 100 // 100x price
+        );
+        targetSqrtPriceX96 = uint160(bounded);
+
+        TestERC20 tokenA = new TestERC20(type(uint256).max);
+        TestERC20 tokenB = new TestERC20(type(uint256).max);
+
+        (address token0, address token1) =
+            address(tokenA) < address(tokenB) ? (address(tokenA), address(tokenB)) : (address(tokenB), address(tokenA));
+
+        migrator.initialize(token0, token1, liquidityMigratorData);
+
+        uint256 amount = 1e24;
+        tokenA.transfer(address(migrator), amount);
+        tokenB.transfer(address(migrator), amount);
+
+        uint256 liquidity = migrator.migrate(targetSqrtPriceX96, token0, token1, address(0xbeef));
+
+        assertGt(liquidity, 0, "Should have created liquidity");
+
+        CustomUniswapV3Locker locker = migrator.CUSTOM_V3_LOCKER();
+        assertEq(IERC721(address(nfpm)).balanceOf(address(locker)), 1, "Locker should have 1 NFT");
+    }
+
+    function testFuzz_migrate_WithVariousAmounts(uint128 amount0, uint128 amount1) public {
+        amount0 = uint128(bound(amount0, 1e18, 1e30));
+        amount1 = uint128(bound(amount1, 1e18, 1e30));
+
+        TestERC20 tokenA = new TestERC20(type(uint256).max);
+        TestERC20 tokenB = new TestERC20(type(uint256).max);
+
+        (address token0, address token1) =
+            address(tokenA) < address(tokenB) ? (address(tokenA), address(tokenB)) : (address(tokenB), address(tokenA));
+
+        migrator.initialize(token0, token1, liquidityMigratorData);
+
+        if (address(tokenA) == token0) {
+            tokenA.transfer(address(migrator), amount0);
+            tokenB.transfer(address(migrator), amount1);
+        } else {
+            tokenA.transfer(address(migrator), amount1);
+            tokenB.transfer(address(migrator), amount0);
+        }
+
+        uint256 balanceBefore0 = ERC20(token0).balanceOf(address(this));
+        uint256 balanceBefore1 = ERC20(token1).balanceOf(address(this));
+
+        uint160 sqrtPriceX96_1_1 = 79_228_162_514_264_337_593_543_950_336;
+        uint256 liquidity = migrator.migrate(sqrtPriceX96_1_1, token0, token1, address(0xbeef));
+
+        assertGt(liquidity, 0, "Should have created liquidity");
+
+        uint256 balanceAfter0 = ERC20(token0).balanceOf(address(this));
+        uint256 balanceAfter1 = ERC20(token1).balanceOf(address(this));
+
+        if (amount0 != amount1) {
+            assertTrue(
+                balanceAfter0 > balanceBefore0 || balanceAfter1 > balanceBefore1,
+                "Should have received refund when amounts differ"
+            );
+        }
+    }
+
+    function testFuzz_migrate_AtVariousTicks(
+        int24 targetTick
+    ) public {
+        uint24 testFeeTier = 500;
+        int24 tickSpacing = 10;
+
+        targetTick = int24(bound(targetTick, -46_000, 46_000));
+
+        targetTick = (targetTick / tickSpacing) * tickSpacing;
+
+        CustomUniswapV3Migrator testMigrator = new CustomUniswapV3Migrator(
+            address(this),
+            nfpm,
+            IBaseSwapRouter02(UNISWAP_V3_ROUTER_02_BASE),
+            LOCKER_OWNER,
+            DOPPLER_FEE_RECEIVER,
+            testFeeTier
+        );
+
+        TestERC20 tokenA = new TestERC20(type(uint256).max);
+        TestERC20 tokenB = new TestERC20(type(uint256).max);
+
+        (address token0, address token1) =
+            address(tokenA) < address(tokenB) ? (address(tokenA), address(tokenB)) : (address(tokenB), address(tokenA));
+
+        testMigrator.initialize(token0, token1, liquidityMigratorData);
+
+        tokenA.transfer(address(testMigrator), 1e24);
+        tokenB.transfer(address(testMigrator), 1e24);
+
+        uint160 targetSqrtPriceX96 = TickMath.getSqrtPriceAtTick(targetTick);
+
+        uint256 liquidity = testMigrator.migrate(targetSqrtPriceX96, token0, token1, address(0xbeef));
+
+        assertGt(liquidity, 0, "Should have created liquidity");
+
+        address pool = factory.getPool(token0, token1, testFeeTier);
+        (uint160 currentSqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
+        assertEq(currentSqrtPriceX96, targetSqrtPriceX96, "Pool should be at target price");
+    }
+
+    function testFuzz_refundDust_WithVariousAmounts(uint256 excessAmount0, uint256 excessAmount1) public {
+        excessAmount0 = bound(excessAmount0, 0, 1e20);
+        excessAmount1 = bound(excessAmount1, 0, 1e20);
+
+        vm.assume(excessAmount0 != 0 || excessAmount1 != 0);
+
+        uint256 baseAmount = 1e24;
+
+        TestERC20 tokenA = new TestERC20(type(uint256).max);
+        TestERC20 tokenB = new TestERC20(type(uint256).max);
+
+        (address token0, address token1) =
+            address(tokenA) < address(tokenB) ? (address(tokenA), address(tokenB)) : (address(tokenB), address(tokenA));
+
+        migrator.initialize(token0, token1, liquidityMigratorData);
+
+        uint256 totalAmount0 = baseAmount + excessAmount0;
+        uint256 totalAmount1 = baseAmount + excessAmount1;
+
+        if (address(tokenA) == token0) {
+            tokenA.transfer(address(migrator), totalAmount0);
+            tokenB.transfer(address(migrator), totalAmount1);
+        } else {
+            tokenA.transfer(address(migrator), totalAmount1);
+            tokenB.transfer(address(migrator), totalAmount0);
+        }
+
+        uint256 balanceBefore0 = ERC20(token0).balanceOf(address(this));
+        uint256 balanceBefore1 = ERC20(token1).balanceOf(address(this));
+
+        uint160 sqrtPriceX96_1_1 = 79_228_162_514_264_337_593_543_950_336;
+        migrator.migrate(sqrtPriceX96_1_1, token0, token1, address(0xbeef));
+
+        uint256 refund0 = ERC20(token0).balanceOf(address(this)) - balanceBefore0;
+        uint256 refund1 = ERC20(token1).balanceOf(address(this)) - balanceBefore1;
+
+        assertTrue(refund0 > 0 || refund1 > 0, "Should receive some refund");
+
+        assertEq(ERC20(token0).balanceOf(address(migrator)), 0, "Migrator should have no token0");
+        assertEq(ERC20(token1).balanceOf(address(migrator)), 0, "Migrator should have no token1");
+    }
 }

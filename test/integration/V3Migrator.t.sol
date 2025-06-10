@@ -380,4 +380,261 @@ contract V3MigratorTest is BaseTest {
             vm.warp(vm.getBlockTimestamp() + 200);
         }
     }
+
+    function testFuzz_migrate_v3_withVariousFeeTiers(
+        uint24 feeTier
+    ) public {
+        vm.assume(feeTier == 500 || feeTier == 3000 || feeTier == 10_000);
+
+        (address integrator, CustomUniswapV3Migrator testMigrator) = _setupContractsWithCustomMigrator(feeTier);
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+
+        (
+            bytes32 salt,
+            address hook,
+            address asset,
+            address pool,
+            address governance,
+            address timelock,
+            address migrationPool
+        ) = _createPool(integrator, liquidityMigratorData);
+
+        address weth = address(testMigrator.WETH());
+        address token0 = asset < weth ? asset : weth;
+        address token1 = asset < weth ? weth : asset;
+        address createdPool = IUniswapV3Factory(UNISWAP_V3_FACTORY_BASE).getPool(token0, token1, feeTier);
+        assertEq(createdPool, migrationPool, "Pool should have been created with correct fee tier");
+
+        _executeMinimalSwapsToMinProceeds(hook);
+        vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
+        airlock.migrate(asset);
+
+        assertGt(
+            ERC721(address(NFPM)).balanceOf(address(testMigrator.CUSTOM_V3_LOCKER())),
+            0,
+            "Locker should have NFT position"
+        );
+    }
+
+    function testFuzz_migrate_v3_withVariousSwapAmounts(
+        uint256 swapAmount1,
+        uint256 swapAmount2,
+        uint256 swapAmount3
+    ) public {
+        // Bound swap amounts to reasonable range
+        swapAmount1 = bound(swapAmount1, 0.1 ether, 100 ether);
+        swapAmount2 = bound(swapAmount2, 0.1 ether, 100 ether);
+        swapAmount3 = bound(swapAmount3, 0.1 ether, 100 ether);
+
+        address integrator = _setupContracts();
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+
+        (
+            bytes32 salt,
+            address hook,
+            address asset,
+            address pool,
+            address governance,
+            address timelock,
+            address migrationPool
+        ) = _createPool(integrator, liquidityMigratorData);
+
+        // Execute fuzzed swaps
+        _executeFuzzedSwaps(hook, swapAmount1, swapAmount2, swapAmount3);
+
+        // Advance to end time and migrate
+        vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
+
+        (,,, uint256 totalProceeds,,) = Doppler(payable(hook)).state();
+
+        // Only migrate if minimum proceeds were reached
+        if (totalProceeds >= Doppler(payable(hook)).minimumProceeds()) {
+            airlock.migrate(asset);
+            assertGt(
+                ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())),
+                0,
+                "Locker should have NFT position"
+            );
+        }
+    }
+
+    function testFuzz_migrate_v3_withVariousFeeReceivers(
+        address feeReceiver
+    ) public {
+        vm.assume(feeReceiver != address(0));
+        vm.assume(uint160(feeReceiver) > 255); // Not a precompile
+
+        address integrator = _setupContracts();
+        bytes memory liquidityMigratorData = abi.encode(feeReceiver);
+
+        (
+            bytes32 salt,
+            address hook,
+            address asset,
+            address pool,
+            address governance,
+            address timelock,
+            address migrationPool
+        ) = _createPool(integrator, liquidityMigratorData);
+
+        // Verify fee receiver was registered
+        assertEq(migrator.poolFeeReceivers(migrationPool), feeReceiver, "Fee receiver should match");
+
+        // Execute swaps and migrate
+        _executeMinimalSwapsToMinProceeds(hook);
+        vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
+        airlock.migrate(asset);
+
+        assertGt(
+            ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())), 0, "Locker should have NFT position"
+        );
+    }
+
+    function testFuzz_migrate_v3_withVariousTimings(
+        uint256 swapDelay1,
+        uint256 swapDelay2,
+        uint256 migrationDelay
+    ) public {
+        swapDelay1 = bound(swapDelay1, 100, 3600);
+        swapDelay2 = bound(swapDelay2, 100, 3600);
+        migrationDelay = bound(migrationDelay, 1, 86_400);
+
+        address integrator = _setupContracts();
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+
+        (
+            bytes32 salt,
+            address hook,
+            address asset,
+            address pool,
+            address governance,
+            address timelock,
+            address migrationPool
+        ) = _createPool(integrator, liquidityMigratorData);
+
+        _executeSwapsWithDelays(hook, swapDelay1, swapDelay2);
+
+        vm.warp(Doppler(payable(hook)).endingTime() + migrationDelay);
+
+        (,,, uint256 totalProceeds,,) = Doppler(payable(hook)).state();
+
+        if (totalProceeds >= Doppler(payable(hook)).minimumProceeds()) {
+            airlock.migrate(asset);
+            assertGt(
+                ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())),
+                0,
+                "Locker should have NFT position"
+            );
+        }
+    }
+
+    function _executeFuzzedSwaps(address hook, uint256 amount1, uint256 amount2, uint256 amount3) internal {
+        (Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing, IHooks hooks) =
+            Doppler(payable(hook)).poolKey();
+
+        PoolKey memory poolKey =
+            PoolKey({ currency0: currency0, currency1: currency1, hooks: hooks, fee: fee, tickSpacing: tickSpacing });
+
+        uint256[3] memory amounts = [amount1, amount2, amount3];
+
+        for (uint256 i = 0; i < 3; i++) {
+            if (amounts[i] > 0) {
+                deal(address(this), amounts[i]);
+
+                (uint160 currentSqrtPrice,,,) = manager.getSlot0(poolKey.toId());
+                uint160 priceLimit;
+                if (currentSqrtPrice > TickMath.MIN_SQRT_PRICE + 1000) {
+                    priceLimit = currentSqrtPrice - 1000;
+                } else {
+                    priceLimit = TickMath.MIN_SQRT_PRICE + 1;
+                }
+
+                try swapRouter.swap{ value: amounts[i] }(
+                    poolKey,
+                    IPoolManager.SwapParams(true, -int256(amounts[i]), priceLimit),
+                    PoolSwapTest.TestSettings(false, false),
+                    ""
+                ) { } catch {
+                    continue;
+                }
+
+                vm.warp(vm.getBlockTimestamp() + 200);
+            }
+        }
+    }
+
+    function _executeSwapsWithDelays(address hook, uint256 delay1, uint256 delay2) internal {
+        (Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing, IHooks hooks) =
+            Doppler(payable(hook)).poolKey();
+
+        PoolKey memory poolKey =
+            PoolKey({ currency0: currency0, currency1: currency1, hooks: hooks, fee: fee, tickSpacing: tickSpacing });
+
+        uint256 swapAmount = 5 ether;
+        deal(address(this), swapAmount);
+
+        (uint160 currentSqrtPrice,,,) = manager.getSlot0(poolKey.toId());
+        uint160 priceLimit;
+        if (currentSqrtPrice > TickMath.MIN_SQRT_PRICE + 1000) {
+            priceLimit = currentSqrtPrice - 1000;
+        } else {
+            priceLimit = TickMath.MIN_SQRT_PRICE + 1;
+        }
+
+        try swapRouter.swap{ value: swapAmount }(
+            poolKey,
+            IPoolManager.SwapParams(true, -int256(swapAmount), priceLimit),
+            PoolSwapTest.TestSettings(false, false),
+            ""
+        ) { } catch { }
+
+        vm.warp(vm.getBlockTimestamp() + delay1);
+
+        (,,, uint256 totalProceeds,,) = Doppler(payable(hook)).state();
+        if (totalProceeds < Doppler(payable(hook)).minimumProceeds()) {
+            // Second swap
+            deal(address(this), swapAmount);
+            (currentSqrtPrice,,,) = manager.getSlot0(poolKey.toId());
+            if (currentSqrtPrice > TickMath.MIN_SQRT_PRICE + 1000) {
+                priceLimit = currentSqrtPrice - 1000;
+            } else {
+                priceLimit = TickMath.MIN_SQRT_PRICE + 1;
+            }
+
+            try swapRouter.swap{ value: swapAmount }(
+                poolKey,
+                IPoolManager.SwapParams(true, -int256(swapAmount), priceLimit),
+                PoolSwapTest.TestSettings(false, false),
+                ""
+            ) { } catch { }
+
+            vm.warp(vm.getBlockTimestamp() + delay2);
+
+            while (true) {
+                (,,, totalProceeds,,) = Doppler(payable(hook)).state();
+                if (totalProceeds >= Doppler(payable(hook)).minimumProceeds()) {
+                    break;
+                }
+
+                deal(address(this), swapAmount);
+                (currentSqrtPrice,,,) = manager.getSlot0(poolKey.toId());
+                if (currentSqrtPrice > TickMath.MIN_SQRT_PRICE + 1000) {
+                    priceLimit = currentSqrtPrice - 1000;
+                } else {
+                    priceLimit = TickMath.MIN_SQRT_PRICE + 1;
+                }
+
+                try swapRouter.swap{ value: swapAmount }(
+                    poolKey,
+                    IPoolManager.SwapParams(true, -int256(swapAmount), priceLimit),
+                    PoolSwapTest.TestSettings(false, false),
+                    ""
+                ) { } catch {
+                    break;
+                }
+
+                vm.warp(vm.getBlockTimestamp() + 200);
+            }
+        }
+    }
 }
