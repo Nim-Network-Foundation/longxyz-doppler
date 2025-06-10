@@ -11,7 +11,6 @@ import { ICustomUniswapV3Migrator } from "src/extensions/interfaces/ICustomUnisw
 import { IBaseSwapRouter02 } from "src/extensions/interfaces/IBaseSwapRouter02.sol";
 import { CustomUniswapV3Locker } from "src/extensions/CustomUniswapV3Locker.sol";
 import { ImmutableAirlock } from "src/base/ImmutableAirlock.sol";
-import { console } from "forge-std/console.sol";
 
 /**
  * @author ant
@@ -31,6 +30,11 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
     IWETH public immutable WETH;
     CustomUniswapV3Locker public immutable CUSTOM_V3_LOCKER;
     uint24 public immutable FEE_TIER;
+
+    /// @dev Transient pool used for swap callback
+    address private currentPool = address(1);
+    /// @dev Transient token used for swap callback
+    address private swapToken = address(1);
 
     mapping(address pool => address integratorFeeReceiver) public poolFeeReceivers;
 
@@ -110,11 +114,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         address pool = FACTORY.getPool(token0, token1, FEE_TIER);
         require(pool != address(0), PoolDoesNotExist());
 
-        // in case the pool failed to initialize sqrtPriceX96 during `initialize`, initialize it with the given sqrtPriceX96
-        (uint160 initializedSqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
-        if (initializedSqrtPriceX96 == 0) {
-            IUniswapV3Pool(pool).initialize(sqrtPriceX96);
-        }
+        _rebalance(pool, token0, token1, sqrtPriceX96);
 
         // not sure if WETH is token0 or token1, so need to check both
         uint256 balance0;
@@ -129,27 +129,15 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
             WETH.deposit{ value: address(this).balance }();
             balance1 = WETH.balanceOf(address(this));
             balance0 = ERC20(token0).balanceOf(address(this));
+        } else {
+            balance0 = ERC20(token0).balanceOf(address(this));
+            balance1 = ERC20(token1).balanceOf(address(this));
         }
 
         int24 tickSpacing = FACTORY.feeAmountTickSpacing(FEE_TIER);
+
         ERC20(token0).safeApprove(address(NONFUNGIBLE_POSITION_MANAGER), balance0);
         ERC20(token1).safeApprove(address(NONFUNGIBLE_POSITION_MANAGER), balance1);
-
-        address integratorFeeReceiver = poolFeeReceivers[pool];
-        if (initializedSqrtPriceX96 != 0) {
-            (balance0, balance1) = _rebalance(
-                pool,
-                token0,
-                token1,
-                balance0,
-                balance1,
-                initializedSqrtPriceX96,
-                sqrtPriceX96,
-                tickSpacing,
-                integratorFeeReceiver,
-                recipient
-            );
-        }
 
         int24 currentTick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
         int24 finalTickLower = _getDivisibleTick(currentTick, tickSpacing, false);
@@ -171,6 +159,8 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
              })
         );
 
+        address integratorFeeReceiver = poolFeeReceivers[pool];
+
         // Call to safeTransfer will trigger `onERC721Received` which must return the selector else transfer will fail
         NONFUNGIBLE_POSITION_MANAGER.safeTransferFrom(address(this), address(CUSTOM_V3_LOCKER), tokenId);
         CUSTOM_V3_LOCKER.register(tokenId, amount0, amount1, integratorFeeReceiver, recipient);
@@ -180,46 +170,49 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         return liquidity;
     }
 
-    function _rebalance(
-        address pool,
-        address token0,
-        address token1,
-        uint256 balance0,
-        uint256 balance1,
-        uint160 initializedSqrtPriceX96,
-        uint160 targetSqrtPriceX96,
-        int24 tickSpacing,
-        address integratorFeeReceiver,
-        address recipient
-    ) internal returns (uint256 balance0AfterSwap, uint256 balance1AfterSwap) {
-        bool zeroForOne = targetSqrtPriceX96 < initializedSqrtPriceX96;
-        address swapToken = zeroForOne ? token0 : token1;
-        
+    function _rebalance(address pool, address token0, address token1, uint160 targetSqrtPriceX96) internal {
+        (uint160 currentSqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
+
+        if (currentSqrtPriceX96 == 0) {
+            IUniswapV3Pool(pool).initialize(targetSqrtPriceX96);
+            return;
+        }
+
+        if (currentSqrtPriceX96 == targetSqrtPriceX96) {
+            return;
+        }
+
+        bool zeroForOne = targetSqrtPriceX96 < currentSqrtPriceX96;
+
+        swapToken = zeroForOne ? token0 : token1;
+        currentPool = pool;
+
         // Calculate proper price limit based on direction
         uint160 sqrtPriceLimitX96;
         if (zeroForOne) {
             // Price is decreasing, limit must be between target and MIN
-            sqrtPriceLimitX96 = targetSqrtPriceX96 > TickMath.MIN_SQRT_PRICE + 1 
-                ? targetSqrtPriceX96 
-                : TickMath.MIN_SQRT_PRICE + 1;
+            sqrtPriceLimitX96 =
+                targetSqrtPriceX96 > TickMath.MIN_SQRT_PRICE + 1 ? targetSqrtPriceX96 : TickMath.MIN_SQRT_PRICE + 1;
         } else {
             // Price is increasing, limit must be between target and MAX
-            sqrtPriceLimitX96 = targetSqrtPriceX96 < TickMath.MAX_SQRT_PRICE - 1 
-                ? targetSqrtPriceX96 
-                : TickMath.MAX_SQRT_PRICE - 1;
+            sqrtPriceLimitX96 =
+                targetSqrtPriceX96 < TickMath.MAX_SQRT_PRICE - 1 ? targetSqrtPriceX96 : TickMath.MAX_SQRT_PRICE - 1;
         }
-        
+
         // Swap minimal amount to move price
         IUniswapV3Pool(pool).swap(
             address(this),
             zeroForOne,
-            1, // minimal amount  
+            1, // minimal amount
             sqrtPriceLimitX96,
             ""
         );
 
-        balance0AfterSwap = ERC20(token0).balanceOf(address(this));
-        balance1AfterSwap = ERC20(token1).balanceOf(address(this));
+        (uint160 newSqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
+        require(newSqrtPriceX96 == targetSqrtPriceX96);
+
+        swapToken = address(1);
+        currentPool = address(1);
     }
 
     function _getDivisibleTick(int24 tick, int24 tickSpacing, bool isUpper) internal pure returns (int24 finalTick) {
@@ -266,6 +259,13 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         return this.onERC721Received.selector;
     }
 
-    // Required for manual swap
-    fallback() external payable {}
+    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata) external {
+        require(msg.sender == currentPool);
+
+        if (amount0Delta > 0) {
+            ERC20(IUniswapV3Pool(msg.sender).token0()).safeTransfer(msg.sender, uint256(amount0Delta));
+        } else if (amount1Delta > 0) {
+            ERC20(IUniswapV3Pool(msg.sender).token1()).safeTransfer(msg.sender, uint256(amount1Delta));
+        }
+    }
 }
