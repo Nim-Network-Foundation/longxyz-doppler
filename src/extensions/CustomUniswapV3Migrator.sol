@@ -155,7 +155,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
                 amount0Min: balance0 * (WAD - MAX_SLIPPAGE_WAD) / WAD,
                 amount1Min: balance1 * (WAD - MAX_SLIPPAGE_WAD) / WAD,
                 recipient: address(this),
-                deadline: block.timestamp + 180 // 3 minutes
+                deadline: block.timestamp
              })
         );
 
