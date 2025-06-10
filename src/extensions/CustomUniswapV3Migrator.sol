@@ -9,6 +9,7 @@ import { IUniswapV3Pool } from "@v3-core/interfaces/IUniswapV3Pool.sol";
 import { INonfungiblePositionManager } from "src/extensions/interfaces/INonfungiblePositionManager.sol";
 import { ICustomUniswapV3Migrator } from "src/extensions/interfaces/ICustomUniswapV3Migrator.sol";
 import { IBaseSwapRouter02 } from "src/extensions/interfaces/IBaseSwapRouter02.sol";
+import { MigrationMath } from "src/libs/MigrationMath.sol";
 import { CustomUniswapV3Locker } from "src/extensions/CustomUniswapV3Locker.sol";
 import { ImmutableAirlock } from "src/base/ImmutableAirlock.sol";
 
@@ -120,10 +121,19 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
             balance1 = ERC20(token1).balanceOf(address(this));
         }
 
+        (uint256 depositAmount0, uint256 depositAmount1) =
+            MigrationMath.computeDepositAmounts(balance0, balance1, sqrtPriceX96);
+
+        if (depositAmount1 > balance1) {
+            (, depositAmount1) = MigrationMath.computeDepositAmounts(depositAmount0, balance1, sqrtPriceX96);
+        } else {
+            (depositAmount0,) = MigrationMath.computeDepositAmounts(balance0, depositAmount1, sqrtPriceX96);
+        }
+
         int24 tickSpacing = FACTORY.feeAmountTickSpacing(FEE_TIER);
 
-        ERC20(token0).safeApprove(address(NONFUNGIBLE_POSITION_MANAGER), balance0);
-        ERC20(token1).safeApprove(address(NONFUNGIBLE_POSITION_MANAGER), balance1);
+        ERC20(token0).safeApprove(address(NONFUNGIBLE_POSITION_MANAGER), depositAmount0);
+        ERC20(token1).safeApprove(address(NONFUNGIBLE_POSITION_MANAGER), depositAmount1);
 
         int24 currentTick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
         int24 finalTickLower = _getDivisibleTick(currentTick, tickSpacing, false);
@@ -154,8 +164,8 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
                 fee: FEE_TIER,
                 tickLower: finalTickLower,
                 tickUpper: finalTickUpper,
-                amount0Desired: balance0,
-                amount1Desired: balance1,
+                amount0Desired: depositAmount0,
+                amount1Desired: depositAmount1,
                 amount0Min: 0,
                 amount1Min: 0,
                 recipient: address(this),
@@ -168,7 +178,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         NONFUNGIBLE_POSITION_MANAGER.safeTransferFrom(address(this), address(CUSTOM_V3_LOCKER), tokenId);
         CUSTOM_V3_LOCKER.register(tokenId, amount0, amount1, integratorFeeReceiver, recipient);
 
-        _refundDustAndRevokeAllowances(token0, token1, balance0, balance1, amount0, amount1, recipient);
+        _refundDustAndRevokeAllowances(token0, token1, balance0, balance1, depositAmount0, depositAmount1, recipient);
 
         return liquidity;
     }
