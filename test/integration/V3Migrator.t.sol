@@ -116,11 +116,7 @@ contract V3MigratorTest is BaseTest {
 
         airlock.migrate(asset);
 
-        assertEq(
-            ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())),
-            2,
-            "Locker should have two tokens after accounting rebalancing"
-        );
+        assertEq(ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())), 1, "Locker should have one NFT");
     }
 
     function test_migrate_v3_dustRefund() public {

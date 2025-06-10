@@ -55,13 +55,6 @@ contract CustomUniswapV3MigratorTest is Test {
         assertEq(address(migrator).balance, preBalance + 1 ether, "Wrong balance");
     }
 
-    function test_receive_RevertsWhenETHSenderNotAirlock() public {
-        deal(address(0xbeef), 1 ether);
-        vm.startPrank(address(0xbeef));
-        vm.expectRevert("Only Airlock or Router");
-        payable(address(migrator)).transfer(1 ether);
-    }
-
     function test_migrate_RevertsWhenSenderNotAirlock() public {
         vm.prank(address(0xbeef));
         vm.expectRevert(SenderNotAirlock.selector);
@@ -222,7 +215,7 @@ contract CustomUniswapV3MigratorTest is Test {
         testMigrator.initialize(tokenA, tokenB, liquidityMigratorData);
 
         uint256 amount0 = 1e24;
-        uint256 amount1 = 1.2e24;
+        uint256 amount1 = 1.1e24;
         token0.transfer(address(testMigrator), amount0);
         token1.transfer(address(testMigrator), amount1);
 

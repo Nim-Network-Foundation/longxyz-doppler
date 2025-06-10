@@ -22,7 +22,6 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
     /// @dev Constant used to increase precision during calculations
     uint256 constant WAD = 1 ether;
     uint256 constant MAX_SLIPPAGE_WAD = 0.15 ether; // 15% slippage
-    uint256 constant REBALANCE_AMOUNT_WAD = 0.000001 ether; // 0.0001% of liquidity used for rebalancing
 
     INonfungiblePositionManager public immutable NONFUNGIBLE_POSITION_MANAGER;
     IUniswapV3Factory public immutable FACTORY;
@@ -38,12 +37,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
 
     mapping(address pool => address integratorFeeReceiver) public poolFeeReceivers;
 
-    receive() external payable onlyAirlockOrRouter { }
-
-    modifier onlyAirlockOrRouter() {
-        require(msg.sender == address(airlock) || msg.sender == address(ROUTER), "Only Airlock or Router");
-        _;
-    }
+    receive() external payable onlyAirlock { }
 
     constructor(
         address airlock_,
@@ -221,7 +215,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         );
 
         (uint160 newSqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
-        require(newSqrtPriceX96 == targetSqrtPriceX96);
+        require(newSqrtPriceX96 == targetSqrtPriceX96, RebalanceFailed());
 
         swapToken = address(1);
         currentPool = address(1);
@@ -268,7 +262,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
     }
 
     function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata) external {
-        require(msg.sender == currentPool);
+        require(msg.sender == currentPool, InvalidPoolCallback());
 
         if (amount0Delta > 0) {
             ERC20(IUniswapV3Pool(msg.sender).token0()).safeTransfer(msg.sender, uint256(amount0Delta));
