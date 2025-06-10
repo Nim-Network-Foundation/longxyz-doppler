@@ -72,7 +72,6 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         (address integratorFeeReceiver) = abi.decode(liquidityMigratorData, (address));
         require(integratorFeeReceiver != address(0), ZeroFeeReceiverAddress());
 
-        // v3 pool only allows WETH
         if (numeraire == address(0)) numeraire = address(WETH);
         (address token0, address token1) = asset < numeraire ? (asset, numeraire) : (numeraire, asset);
 
@@ -88,7 +87,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         int24 minTick = TickMath.minUsableTick(tickSpacing) + tickSpacing;
         int24 maxTick = TickMath.maxUsableTick(tickSpacing) - tickSpacing;
         uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(asset == token0 ? minTick : maxTick);
-        // won't revert even failed to initialize
+
         try IUniswapV3Pool(pool).initialize(sqrtPriceX96) { } catch { }
 
         return pool;
@@ -107,7 +106,6 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         address token1,
         address recipient
     ) external payable onlyAirlock returns (uint256) {
-        // v3 pool only allows WETH, smaller address will be passed as token0 from Airlock so only need to check if token0 is address(0)
         if (token0 == address(0)) token0 = address(WETH);
         if (token0 > token1) (token0, token1) = (token1, token0);
 
@@ -116,11 +114,9 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
 
         _rebalance(pool, token0, token1, sqrtPriceX96);
 
-        // not sure if WETH is token0 or token1, so need to check both
         uint256 balance0;
         uint256 balance1;
 
-        // only wrap ETH after confirming the pool exists to save gas
         if (token0 == address(WETH)) {
             WETH.deposit{ value: address(this).balance }();
             balance0 = WETH.balanceOf(address(this));
@@ -161,7 +157,6 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
 
         address integratorFeeReceiver = poolFeeReceivers[pool];
 
-        // Call to safeTransfer will trigger `onERC721Received` which must return the selector else transfer will fail
         NONFUNGIBLE_POSITION_MANAGER.safeTransferFrom(address(this), address(CUSTOM_V3_LOCKER), tokenId);
         CUSTOM_V3_LOCKER.register(tokenId, amount0, amount1, integratorFeeReceiver, recipient);
 
@@ -187,7 +182,6 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         swapToken = zeroForOne ? token0 : token1;
         currentPool = pool;
 
-        // Calculate proper price limit based on direction
         uint160 sqrtPriceLimitX96;
         if (zeroForOne) {
             // Price is decreasing, limit must be between target and MIN
