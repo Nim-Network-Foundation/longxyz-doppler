@@ -180,6 +180,222 @@ contract CustomUniswapV3LockerTest is Test {
         locker.unlock(tokenId);
     }
 
+    function test_register_RevertsWhenNotCalledByMigrator() public {
+        uint256 tokenId = 12_345;
+        vm.expectRevert(abi.encodeWithSignature("SenderNotMigrator()"));
+        locker.register(tokenId, 1000e18, 1000e18, INTEGRATOR_FEE_RECEIVER, timelock);
+    }
+
+    function test_register_RevertsWhenNFTPositionNotOwned() public {
+        tokenFoo.transfer(address(this), 1000e18);
+        tokenBar.transfer(address(this), 1000e18);
+
+        (address token0, address token1) = address(tokenFoo) > address(tokenBar)
+            ? (address(tokenBar), address(tokenFoo))
+            : (address(tokenFoo), address(tokenBar));
+
+        pool = IUniswapV3Pool(FACTORY.createPool(token0, token1, FEE_TIER));
+        pool.initialize(Constants.SQRT_PRICE_1_1);
+
+        IERC20(token0).approve(address(NFPM), 1000e18);
+        IERC20(token1).approve(address(NFPM), 1000e18);
+
+        (uint256 tokenId,, uint256 amount0, uint256 amount1) = NFPM.mint(
+            INonfungiblePositionManager.MintParams({
+                token0: token0,
+                token1: token1,
+                fee: FEE_TIER,
+                tickLower: -200,
+                tickUpper: 200,
+                amount0Desired: 1000e18,
+                amount1Desired: 1000e18,
+                amount0Min: 0,
+                amount1Min: 0,
+                recipient: alice,
+                deadline: block.timestamp + 3600
+            })
+        );
+
+        vm.prank(address(migrator));
+        vm.expectRevert(abi.encodeWithSelector(ICustomUniswapV3Locker.NFTPositionNotFound.selector, tokenId));
+        locker.register(tokenId, amount0, amount1, INTEGRATOR_FEE_RECEIVER, timelock);
+    }
+
+    function test_harvest_WithNoFeesToCollect() public {
+        (uint256 tokenId,,,) = test_register_WithLockUpPeriod_InitializesPool();
+
+        (uint256 collectedAmount0, uint256 collectedAmount1) = locker.harvest(tokenId);
+
+        assertEq(collectedAmount0, 0);
+        assertEq(collectedAmount1, 0);
+        assertEq(tokenFoo.balanceOf(DOPPLER_FEE_RECEIVER), 0);
+        assertEq(tokenBar.balanceOf(DOPPLER_FEE_RECEIVER), 0);
+        assertEq(tokenFoo.balanceOf(INTEGRATOR_FEE_RECEIVER), 0);
+        assertEq(tokenBar.balanceOf(INTEGRATOR_FEE_RECEIVER), 0);
+    }
+
+    function test_harvest_WithBothTokenFees() public {
+        (uint256 tokenId,,,) = test_register_WithLockUpPeriod_InitializesPool();
+
+        (,, address token0, address token1,,,,,,,,) = NFPM.positions(tokenId);
+
+        IERC20(token0).approve(address(ROUTER_02), type(uint256).max);
+        ROUTER_02.exactInputSingle(
+            IBaseSwapRouter02.ExactInputSingleParams({
+                tokenIn: token0,
+                tokenOut: token1,
+                fee: FEE_TIER,
+                recipient: address(this),
+                amountIn: 1e18,
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
+            })
+        );
+
+        IERC20(token1).approve(address(ROUTER_02), type(uint256).max);
+        ROUTER_02.exactInputSingle(
+            IBaseSwapRouter02.ExactInputSingleParams({
+                tokenIn: token1,
+                tokenOut: token0,
+                fee: FEE_TIER,
+                recipient: address(this),
+                amountIn: 1e18,
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
+            })
+        );
+
+        (uint256 collectedAmount0, uint256 collectedAmount1) = locker.harvest(tokenId);
+
+        assertGt(collectedAmount0, 0);
+        assertGt(collectedAmount1, 0);
+
+        assertEq(IERC20(token0).balanceOf(DOPPLER_FEE_RECEIVER), collectedAmount0 * 5 / 100);
+        assertEq(IERC20(token1).balanceOf(DOPPLER_FEE_RECEIVER), collectedAmount1 * 5 / 100);
+        assertEq(IERC20(token0).balanceOf(INTEGRATOR_FEE_RECEIVER), collectedAmount0 - collectedAmount0 * 5 / 100);
+        assertEq(IERC20(token1).balanceOf(INTEGRATOR_FEE_RECEIVER), collectedAmount1 - collectedAmount1 * 5 / 100);
+    }
+
+    function test_unlock_RevertsWhenPoolNotInitialized() public {
+        uint256 nonExistentTokenId = 99_999;
+        vm.expectRevert(ICustomUniswapV3Locker.PoolNotInitialized.selector);
+        locker.unlock(nonExistentTokenId);
+    }
+
+    function test_register_WithZeroAmounts() public {
+        tokenFoo.transfer(address(this), 1000e18);
+        tokenBar.transfer(address(this), 1000e18);
+
+        (address token0, address token1) = address(tokenFoo) > address(tokenBar)
+            ? (address(tokenBar), address(tokenFoo))
+            : (address(tokenFoo), address(tokenBar));
+
+        pool = IUniswapV3Pool(FACTORY.createPool(token0, token1, FEE_TIER));
+        pool.initialize(Constants.SQRT_PRICE_1_1);
+
+        IERC20(token0).approve(address(NFPM), 1000e18);
+        IERC20(token1).approve(address(NFPM), 1000e18);
+
+        (uint256 tokenId,,,) = NFPM.mint(
+            INonfungiblePositionManager.MintParams({
+                token0: token0,
+                token1: token1,
+                fee: FEE_TIER,
+                tickLower: -200,
+                tickUpper: 200,
+                amount0Desired: 1000e18,
+                amount1Desired: 1000e18,
+                amount0Min: 0,
+                amount1Min: 0,
+                recipient: address(locker),
+                deadline: block.timestamp + 3600
+            })
+        );
+
+        vm.prank(address(migrator));
+        locker.register(tokenId, 0, 0, INTEGRATOR_FEE_RECEIVER, timelock);
+
+        (uint256 _amount0, uint256 _amount1,,,) = locker.positionStates(tokenId);
+        assertEq(_amount0, 0);
+        assertEq(_amount1, 0);
+    }
+
+    function test_unlock_CollectsFeesBeforeUnlocking() public {
+        (uint256 tokenId,,,) = test_register_WithLockUpPeriod_InitializesPool();
+
+        (,, address token0, address token1,,,,,,,,) = NFPM.positions(tokenId);
+
+        IERC20(token0).approve(address(ROUTER_02), type(uint256).max);
+        ROUTER_02.exactInputSingle(
+            IBaseSwapRouter02.ExactInputSingleParams({
+                tokenIn: token0,
+                tokenOut: token1,
+                fee: FEE_TIER,
+                recipient: address(this),
+                amountIn: 1e18,
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
+            })
+        );
+
+        vm.warp(block.timestamp + 365 days);
+
+        uint256 dopplerBalanceBefore = IERC20(token0).balanceOf(DOPPLER_FEE_RECEIVER);
+        uint256 integratorBalanceBefore = IERC20(token0).balanceOf(INTEGRATOR_FEE_RECEIVER);
+
+        locker.unlock(tokenId);
+
+        assertGt(IERC20(token0).balanceOf(DOPPLER_FEE_RECEIVER), dopplerBalanceBefore);
+        assertGt(IERC20(token0).balanceOf(INTEGRATOR_FEE_RECEIVER), integratorBalanceBefore);
+
+        assertEq(NFPM.ownerOf(tokenId), timelock);
+    }
+
+    function test_multipleHarvests() public {
+        (uint256 tokenId,,,) = test_register_WithLockUpPeriod_InitializesPool();
+
+        (,, address token0, address token1,,,,,,,,) = NFPM.positions(tokenId);
+
+        IERC20(token0).approve(address(ROUTER_02), type(uint256).max);
+        ROUTER_02.exactInputSingle(
+            IBaseSwapRouter02.ExactInputSingleParams({
+                tokenIn: token0,
+                tokenOut: token1,
+                fee: FEE_TIER,
+                recipient: address(this),
+                amountIn: 1e18,
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
+            })
+        );
+
+        (uint256 firstCollected0,) = locker.harvest(tokenId);
+        assertGt(firstCollected0, 0);
+
+        ROUTER_02.exactInputSingle(
+            IBaseSwapRouter02.ExactInputSingleParams({
+                tokenIn: token0,
+                tokenOut: token1,
+                fee: FEE_TIER,
+                recipient: address(this),
+                amountIn: 2e18,
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
+            })
+        );
+
+        (uint256 secondCollected0,) = locker.harvest(tokenId);
+        assertGt(secondCollected0, 0);
+
+        uint256 totalCollected = firstCollected0 + secondCollected0;
+        uint256 expectedDopplerFee = totalCollected * 5 / 100;
+        uint256 actualDopplerBalance = IERC20(token0).balanceOf(DOPPLER_FEE_RECEIVER);
+        uint256 actualIntegratorBalance = IERC20(token0).balanceOf(INTEGRATOR_FEE_RECEIVER);
+
+        assertApproxEqAbs(actualDopplerBalance, expectedDopplerFee, 1);
+        assertApproxEqAbs(actualIntegratorBalance, totalCollected - expectedDopplerFee, 1);
+    }
+
     function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
         return this.onERC721Received.selector;
     }
