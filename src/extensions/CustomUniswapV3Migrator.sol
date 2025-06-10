@@ -19,10 +19,6 @@ import { ImmutableAirlock } from "src/base/ImmutableAirlock.sol";
 contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
     using SafeTransferLib for ERC20;
 
-    /// @dev Constant used to increase precision during calculations
-    uint256 constant WAD = 1 ether;
-    uint256 constant MAX_SLIPPAGE_WAD = 0.15 ether; // 15% slippage
-
     INonfungiblePositionManager public immutable NONFUNGIBLE_POSITION_MANAGER;
     IUniswapV3Factory public immutable FACTORY;
     IBaseSwapRouter02 public immutable ROUTER;
@@ -160,8 +156,8 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
                 tickUpper: finalTickUpper,
                 amount0Desired: balance0,
                 amount1Desired: balance1,
-                amount0Min: balance0 * (WAD - MAX_SLIPPAGE_WAD) / WAD,
-                amount1Min: balance1 * (WAD - MAX_SLIPPAGE_WAD) / WAD,
+                amount0Min: 0,
+                amount1Min: 0,
                 recipient: address(this),
                 deadline: block.timestamp
             })
