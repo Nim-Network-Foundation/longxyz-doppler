@@ -139,6 +139,24 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         int24 finalTickLower = _getDivisibleTick(currentTick, tickSpacing, false);
         int24 finalTickUpper = _getDivisibleTick(currentTick, tickSpacing, true);
 
+        // Ensure ticks are within usable bounds
+        int24 minUsableTick = TickMath.minUsableTick(tickSpacing);
+        int24 maxUsableTick = TickMath.maxUsableTick(tickSpacing);
+
+        if (finalTickLower < minUsableTick) finalTickLower = minUsableTick;
+        if (finalTickUpper > maxUsableTick) finalTickUpper = maxUsableTick;
+
+        // If we're at extreme ticks, create a minimal valid range
+        if (finalTickLower >= finalTickUpper) {
+            if (currentTick >= maxUsableTick - tickSpacing) {
+                finalTickUpper = maxUsableTick;
+                finalTickLower = maxUsableTick - 2 * tickSpacing;
+            } else if (currentTick <= minUsableTick + tickSpacing) {
+                finalTickLower = minUsableTick;
+                finalTickUpper = minUsableTick + 2 * tickSpacing;
+            }
+        }
+
         (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1) = NONFUNGIBLE_POSITION_MANAGER.mint(
             INonfungiblePositionManager.MintParams({
                 token0: token0,
@@ -152,7 +170,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
                 amount1Min: balance1 * (WAD - MAX_SLIPPAGE_WAD) / WAD,
                 recipient: address(this),
                 deadline: block.timestamp
-             })
+            })
         );
 
         address integratorFeeReceiver = poolFeeReceivers[pool];
@@ -210,17 +228,13 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
     }
 
     function _getDivisibleTick(int24 tick, int24 tickSpacing, bool isUpper) internal pure returns (int24 finalTick) {
-        finalTick = tick;
-
-        if (tick % tickSpacing != 0) {
-            if (isUpper) {
-                finalTick = (tick + tickSpacing) / tickSpacing * tickSpacing; // Math.ceil(currentTick / tickSpacing) * tickSpacing;
-            } else {
-                finalTick = (tick / tickSpacing) * tickSpacing;
-            }
+        if (isUpper) {
+            // Round up to next tick spacing boundary
+            finalTick = tick % tickSpacing == 0 ? tick + tickSpacing : ((tick / tickSpacing) + 1) * tickSpacing;
+        } else {
+            // Round down to previous tick spacing boundary
+            finalTick = tick % tickSpacing == 0 ? tick - tickSpacing : (tick / tickSpacing) * tickSpacing;
         }
-
-        if (tick == 0 && isUpper) finalTick = tickSpacing;
     }
 
     function _refundDustAndRevokeAllowances(
