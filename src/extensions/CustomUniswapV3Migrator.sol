@@ -26,9 +26,6 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
     CustomUniswapV3Locker public immutable CUSTOM_V3_LOCKER;
     uint24 public immutable FEE_TIER;
 
-    /// @dev Transient pool used for swap callback
-    address private currentPool = address(1);
-
     mapping(address pool => address integratorFeeReceiver) public poolFeeReceivers;
 
     receive() external payable onlyAirlock { }
@@ -167,7 +164,6 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         }
 
         bool zeroForOne = targetSqrtPriceX96 < currentSqrtPriceX96;
-        currentPool = pool;
 
         uint160 sqrtPriceLimitX96;
         if (zeroForOne) {
@@ -180,11 +176,11 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
                 targetSqrtPriceX96 < TickMath.MAX_SQRT_PRICE - 1 ? targetSqrtPriceX96 : TickMath.MAX_SQRT_PRICE - 1;
         }
 
-        // swap minimal amount to move price
+        // swap any amount to move price - no tokens required as no liquidity
         IUniswapV3Pool(pool).swap(
             address(this),
             zeroForOne,
-            1, // minimal amount
+            1,
             sqrtPriceLimitX96,
             ""
         );
@@ -256,15 +252,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         }
     }
 
-    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata) external {
-        require(msg.sender == currentPool, InvalidPoolCallback());
-
-        currentPool = address(1);
-
-        if (amount0Delta > 0) {
-            ERC20(IUniswapV3Pool(msg.sender).token0()).safeTransfer(msg.sender, uint256(amount0Delta));
-        } else if (amount1Delta > 0) {
-            ERC20(IUniswapV3Pool(msg.sender).token1()).safeTransfer(msg.sender, uint256(amount1Delta));
-        }
+    function uniswapV3SwapCallback(int256, int256, bytes calldata) external {
+        // no-op - the rebalancing swap is done without any tokens
     }
 }

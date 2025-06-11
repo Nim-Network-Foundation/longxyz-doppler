@@ -8,5 +8,4 @@ interface ICustomUniswapV3Migrator is ILiquidityMigrator {
     error ZeroFeeReceiverAddress();
     error PoolDoesNotExist();
     error RebalanceFailed();
-    error InvalidPoolCallback();
 }
