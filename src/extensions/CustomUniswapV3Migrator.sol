@@ -188,24 +188,6 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
     }
 
     /**
-     * @notice Rounds a tick to the nearest valid tick divisible by tickSpacing
-     * @dev For upper ticks, rounds up to the next boundary. For lower ticks, rounds down.
-     * @param tick The tick to round
-     * @param tickSpacing The tick spacing of the pool
-     * @param isUpper Whether this is an upper tick (true) or lower tick (false)
-     * @return finalTick The rounded tick value
-     */
-    function _getDivisibleTick(int24 tick, int24 tickSpacing, bool isUpper) internal pure returns (int24 finalTick) {
-        if (isUpper) {
-            // round up to next tick spacing boundary
-            finalTick = tick % tickSpacing == 0 ? tick + tickSpacing : ((tick / tickSpacing) + 1) * tickSpacing;
-        } else {
-            // round down to previous tick spacing boundary
-            finalTick = tick % tickSpacing == 0 ? tick - tickSpacing : (tick / tickSpacing) * tickSpacing;
-        }
-    }
-
-    /**
      * @notice Calculates valid tick boundaries for a concentrated liquidity position
      * @dev Creates a narrow range around the current price, ensuring ticks are:
      *      1. Divisible by tickSpacing
@@ -214,33 +196,32 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
      *      Handles edge cases at price extremes by creating a minimal valid range.
      * @param sqrtPriceX96 The current sqrt price of the pool
      * @param tickSpacing The tick spacing of the pool
-     * @return finalTickLower The lower tick boundary for the position
-     * @return finalTickUpper The upper tick boundary for the position
+     * @return tickLower The lower tick boundary for the position
+     * @return tickUpper The upper tick boundary for the position
      */
     function _calculateValidTicks(
         uint160 sqrtPriceX96,
         int24 tickSpacing
-    ) internal pure returns (int24 finalTickLower, int24 finalTickUpper) {
+    ) internal pure returns (int24 tickLower, int24 tickUpper) {
         int24 currentTick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
-        finalTickLower = _getDivisibleTick(currentTick, tickSpacing, false);
-        finalTickUpper = _getDivisibleTick(currentTick, tickSpacing, true);
 
-        // ensure ticks are within usable bounds
+        int24 compressed = currentTick / tickSpacing;
+        if (currentTick < 0 && currentTick % tickSpacing != 0) compressed--;
+        int24 nearestTick = compressed * tickSpacing;
+
+        tickLower = nearestTick - tickSpacing;
+        tickUpper = nearestTick + tickSpacing;
+
         int24 minUsableTick = TickMath.minUsableTick(tickSpacing);
         int24 maxUsableTick = TickMath.maxUsableTick(tickSpacing);
 
-        if (finalTickLower < minUsableTick) finalTickLower = minUsableTick;
-        if (finalTickUpper > maxUsableTick) finalTickUpper = maxUsableTick;
-
-        // if we're at extreme ticks, create a minimal valid range
-        if (finalTickLower >= finalTickUpper) {
-            if (currentTick >= maxUsableTick - tickSpacing) {
-                finalTickUpper = maxUsableTick;
-                finalTickLower = maxUsableTick - 2 * tickSpacing;
-            } else if (currentTick <= minUsableTick + tickSpacing) {
-                finalTickLower = minUsableTick;
-                finalTickUpper = minUsableTick + 2 * tickSpacing;
-            }
+        if (tickUpper > maxUsableTick) {
+            tickUpper = maxUsableTick;
+            tickLower = tickUpper - tickSpacing;
+        }
+        if (tickLower < minUsableTick) {
+            tickLower = minUsableTick;
+            tickUpper = tickLower + tickSpacing;
         }
     }
 
@@ -378,10 +359,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
      * @return balance0 Balance of token0
      * @return balance1 Balance of token1
      */
-    function _getTokenBalances(
-        address token0,
-        address token1
-    ) internal returns (uint256 balance0, uint256 balance1) {
+    function _getTokenBalances(address token0, address token1) internal returns (uint256 balance0, uint256 balance1) {
         if (token0 == address(WETH)) {
             WETH.deposit{ value: address(this).balance }();
             balance0 = WETH.balanceOf(address(this));
