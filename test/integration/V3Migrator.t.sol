@@ -110,6 +110,23 @@ contract V3MigratorTest is BaseTest {
         assertEq(ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())), 1, "Locker should have one NFT");
     }
 
+    function test_migrate_v3_withMaxProceeds() public {
+        address integrator = _setupContracts();
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+
+        (, address hook, address asset,,,,) = _createPool(integrator, liquidityMigratorData);
+
+        // Perform enough swaps to reach max proceeds
+        _executeSwapsToMaxProceeds(hook);
+
+        (,,, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
+        console.log("Final proceeds:", finalProceeds, "Maximum:", Doppler(payable(hook)).maximumProceeds());
+
+        airlock.migrate(asset);
+
+        assertEq(ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())), 1, "Locker should have one NFT");
+    }
+
     function test_migrate_v3_dustRefund() public {
         address integrator = _setupContracts();
         bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
@@ -311,6 +328,73 @@ contract V3MigratorTest is BaseTest {
             }
 
             vm.warp(vm.getBlockTimestamp() + 200);
+        }
+    }
+
+    function _executeSwapsToMaxProceeds(
+        address hook
+    ) internal {
+        (Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing, IHooks hooks) =
+            Doppler(payable(hook)).poolKey();
+
+        PoolKey memory poolKey =
+            PoolKey({ currency0: currency0, currency1: currency1, hooks: hooks, fee: fee, tickSpacing: tickSpacing });
+
+        uint256 BUY_ETH_AMOUNT = 0.5 ether;
+        uint256 totalEpochs = SALE_DURATION / DEFAULT_EPOCH_LENGTH;
+        uint256 totalEthProceeds;
+        uint256 count = 1;
+
+        while (totalEthProceeds < DEFAULT_MAXIMUM_PROCEEDS) {
+            require(
+                count <= totalEpochs,
+                string.concat(
+                    "exceeding num of total epochs ", vm.toString(totalEpochs), ", please use a bigger BUY_ETH_AMOUNT"
+                )
+            );
+
+            BalanceDelta delta = swapRouter.swap{ value: BUY_ETH_AMOUNT }(
+                poolKey,
+                IPoolManager.SwapParams(true, -int256(BUY_ETH_AMOUNT), MIN_PRICE_LIMIT),
+                PoolSwapTest.TestSettings(false, false),
+                ""
+            );
+            uint256 tokenBought = uint256(int256(delta.amount1() < 0 ? -delta.amount1() : delta.amount1()));
+
+            (,, uint256 totalTokensSold, uint256 totalProceeds,,) = Doppler(payable(hook)).state();
+            totalEthProceeds = totalProceeds;
+
+            // uint160 sqrtPriceX96;
+            // int24 tick;
+
+            // try lensQuoter.quoteDopplerLensData(
+            //     IV4Quoter.QuoteExactSingleParams({ poolKey: key, zeroForOne: !isToken0, exactAmount: 1, hookData: "" })
+            // ) {
+            //     DopplerLensReturnData memory lensData = lensQuoter.quoteDopplerLensData(
+            //         IV4Quoter.QuoteExactSingleParams({
+            //             poolKey: key,
+            //             zeroForOne: !isToken0,
+            //             exactAmount: 1,
+            //             hookData: ""
+            //         })
+            //     );
+            //     sqrtPriceX96 = lensData.sqrtPriceX96;
+            //     tick = lensData.tick;
+            // } catch (bytes memory) {
+            //     (sqrtPriceX96, tick,,) = manager.getSlot0(key.toId());
+            // }
+
+            console.log("\n-------------- SALE No. %d ------------------", count);
+            // console.log("current epoch", hook.getCurrentEpoch());
+            console.log("token bought", tokenBought);
+            console.log("totalTokensSold / circulating supply", totalTokensSold);
+            // console.log("totalProceeds", totalProceeds);
+            // console.log("\n");
+            // console.log("sqrtPriceX96(ethPerOneToken)", sqrtPriceX96);
+            // console.log("tick(tokenPerOneETH)", tick);
+
+            vm.warp(vm.getBlockTimestamp() + 200);
+            count++;
         }
     }
 
