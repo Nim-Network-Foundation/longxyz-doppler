@@ -249,13 +249,13 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         if (amount0 < balance0) {
             ERC20(token0).safeApprove(address(NONFUNGIBLE_POSITION_MANAGER), 0);
             uint256 refund0 = balance0 - amount0;
-            ERC20(token0).safeTransfer(msg.sender, refund0);
+            ERC20(token0).safeTransfer(recipient, refund0);
         }
 
         if (amount1 < balance1) {
             ERC20(token1).safeApprove(address(NONFUNGIBLE_POSITION_MANAGER), 0);
             uint256 refund1 = balance1 - amount1;
-            ERC20(token1).safeTransfer(msg.sender, refund1);
+            ERC20(token1).safeTransfer(recipient, refund1);
         }
     }
 
