@@ -167,7 +167,6 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         }
 
         bool zeroForOne = targetSqrtPriceX96 < currentSqrtPriceX96;
-
         currentPool = pool;
 
         uint160 sqrtPriceLimitX96;
@@ -192,8 +191,6 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
 
         (uint160 newSqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
         require(newSqrtPriceX96 == targetSqrtPriceX96, RebalanceFailed());
-
-        currentPool = address(1);
     }
 
     function _getDivisibleTick(int24 tick, int24 tickSpacing, bool isUpper) internal pure returns (int24 finalTick) {
@@ -261,6 +258,8 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
 
     function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata) external {
         require(msg.sender == currentPool, InvalidPoolCallback());
+
+        currentPool = address(1);
 
         if (amount0Delta > 0) {
             ERC20(IUniswapV3Pool(msg.sender).token0()).safeTransfer(msg.sender, uint256(amount0Delta));
