@@ -211,7 +211,7 @@ contract CustomUniswapV3LockerTest is Test {
                 amount1Desired: 1000e18,
                 amount0Min: 0,
                 amount1Min: 0,
-                recipient: alice,
+                recipient: address(0x1234),
                 deadline: block.timestamp + 3600
             })
         );
@@ -617,9 +617,5 @@ contract CustomUniswapV3LockerTest is Test {
             collected0
         );
         assertEq(IERC20(token0).balanceOf(address(locker)), 0);
-    }
-
-    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
-        return this.onERC721Received.selector;
     }
 }

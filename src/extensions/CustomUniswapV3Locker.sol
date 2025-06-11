@@ -115,13 +115,17 @@ contract CustomUniswapV3Locker is ICustomUniswapV3Locker, IERC721Receiver {
         address integratorFeeReceiver = positionStates[tokenId].integratorFeeReceiver;
 
         // distribute fees - 95% to integratorFeeReceiver, 5% to DOPPLER_FEE_RECEIVER
-        uint256 dopplerFee0 = collectedAmount0 * DOPPLER_FEE_WAD / WAD;
-        uint256 dopplerFee1 = collectedAmount1 * DOPPLER_FEE_WAD / WAD;
+        if (collectedAmount0 > 0) {
+            uint256 dopplerFee0 = collectedAmount0 * DOPPLER_FEE_WAD / WAD;
+            ERC20(token0).safeTransfer(integratorFeeReceiver, collectedAmount0 - dopplerFee0);
+            ERC20(token0).safeTransfer(DOPPLER_FEE_RECEIVER, dopplerFee0);
+        }
 
-        ERC20(token0).safeTransfer(integratorFeeReceiver, collectedAmount0 - dopplerFee0);
-        ERC20(token1).safeTransfer(integratorFeeReceiver, collectedAmount1 - dopplerFee1);
-        ERC20(token0).safeTransfer(DOPPLER_FEE_RECEIVER, dopplerFee0);
-        ERC20(token1).safeTransfer(DOPPLER_FEE_RECEIVER, dopplerFee1);
+        if (collectedAmount1 > 0) {
+            uint256 dopplerFee1 = collectedAmount1 * DOPPLER_FEE_WAD / WAD;
+            ERC20(token1).safeTransfer(integratorFeeReceiver, collectedAmount1 - dopplerFee1);
+            ERC20(token1).safeTransfer(DOPPLER_FEE_RECEIVER, dopplerFee1);
+        }
     }
 
     function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
