@@ -30,6 +30,14 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
 
     receive() external payable onlyAirlock { }
 
+    /**
+     * @notice Constructs the CustomUniswapV3Migrator and deploys a new CustomUniswapV3Locker
+     * @param airlock_ Address of the Airlock contract that will call this migrator
+     * @param positionManager_ Uniswap V3 NFT position manager for minting liquidity positions
+     * @param router Uniswap V3 router to extract factory and WETH addresses
+     * @param dopplerFeeReceiver_ Address that will receive the 5% protocol fee from collected LP fees
+     * @param feeTier_ The fee tier (in basis points) for the V3 pools this migrator will create
+     */
     constructor(
         address airlock_,
         INonfungiblePositionManager positionManager_,
@@ -44,6 +52,14 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         FEE_TIER = feeTier_;
     }
 
+    /**
+     * @notice Initializes a Uniswap V3 pool for future migration
+     * @dev Creates the pool if it doesn't exist and initializes it at an extreme price.
+     * @param asset The token being sold in the Doppler pool
+     * @param numeraire The token used to purchase the asset (address(0) for ETH)
+     * @param liquidityMigratorData Encoded integrator fee receiver address
+     * @return pool The address of the created/existing V3 pool
+     */
     function initialize(
         address asset,
         address numeraire,
@@ -151,6 +167,12 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         return liquidity;
     }
 
+    /**
+     * @notice Rebalances the pool to the target sqrt price
+     * @dev This is done by swapping any amount to move price - no tokens required as no liquidity
+     * @param pool The pool to rebalance
+     * @param targetSqrtPriceX96 The target sqrt price
+     */
     function _rebalance(address pool, uint160 targetSqrtPriceX96) internal {
         (uint160 currentSqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
 
@@ -189,6 +211,14 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         require(newSqrtPriceX96 == targetSqrtPriceX96, RebalanceFailed());
     }
 
+    /**
+     * @notice Rounds a tick to the nearest valid tick divisible by tickSpacing
+     * @dev For upper ticks, rounds up to the next boundary. For lower ticks, rounds down.
+     * @param tick The tick to round
+     * @param tickSpacing The tick spacing of the pool
+     * @param isUpper Whether this is an upper tick (true) or lower tick (false)
+     * @return finalTick The rounded tick value
+     */
     function _getDivisibleTick(int24 tick, int24 tickSpacing, bool isUpper) internal pure returns (int24 finalTick) {
         if (isUpper) {
             // round up to next tick spacing boundary
@@ -199,6 +229,18 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         }
     }
 
+    /**
+     * @notice Calculates valid tick boundaries for a concentrated liquidity position
+     * @dev Creates a narrow range around the current price, ensuring ticks are:
+     *      1. Divisible by tickSpacing
+     *      2. Within the usable tick range
+     *      3. Properly ordered (lower < upper)
+     *      Handles edge cases at price extremes by creating a minimal valid range.
+     * @param sqrtPriceX96 The current sqrt price of the pool
+     * @param tickSpacing The tick spacing of the pool
+     * @return finalTickLower The lower tick boundary for the position
+     * @return finalTickUpper The upper tick boundary for the position
+     */
     function _calculateValidTicks(
         uint160 sqrtPriceX96,
         int24 tickSpacing
@@ -226,6 +268,19 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         }
     }
 
+    /**
+     * @notice Refunds remaining tokens and ETH to the recipient and revokes allowances
+     * @dev After minting the V3 position, any leftover tokens (dust) that couldn't be
+     *      deposited due to price constraints are sent to the recipient.
+     *      Also revokes token approvals.
+     * @param token0 Address of token0
+     * @param token1 Address of token1  
+     * @param balance0 Original balance of token0 before minting
+     * @param balance1 Original balance of token1 before minting
+     * @param amount0 Amount of token0 actually used in minting
+     * @param amount1 Amount of token1 actually used in minting
+     * @param recipient Address to receive the refunded tokens (timelock)
+     */
     function _refundDustAndRevokeAllowances(
         address token0,
         address token1,
@@ -252,6 +307,10 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         }
     }
 
+    /**
+     * @notice No-op callback for the rebalancing swap
+     * @dev No transfers needed since the pool has no liquidity.
+     */
     function uniswapV3SwapCallback(int256, int256, bytes calldata) external {
         // no-op - the rebalancing swap is done without any tokens
     }
