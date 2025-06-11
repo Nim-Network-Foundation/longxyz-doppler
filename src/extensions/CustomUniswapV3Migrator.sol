@@ -4,6 +4,9 @@ pragma solidity ^0.8.24;
 import { SafeTransferLib, ERC20 } from "@solmate/utils/SafeTransferLib.sol";
 import { WETH as IWETH } from "@solmate/tokens/WETH.sol";
 import { TickMath } from "@v4-core/libraries/TickMath.sol";
+import { FullMath } from "@v4-core/libraries/FullMath.sol";
+import { FixedPoint96 } from "@v4-core/libraries/FixedPoint96.sol";
+import { LiquidityAmounts } from "@v4-periphery/libraries/LiquidityAmounts.sol";
 import { IUniswapV3Factory } from "@v3-core/interfaces/IUniswapV3Factory.sol";
 import { IUniswapV3Pool } from "@v3-core/interfaces/IUniswapV3Pool.sol";
 import { ICustomUniswapV3Migrator } from "src/extensions/interfaces/ICustomUniswapV3Migrator.sol";
@@ -109,52 +112,31 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
 
         address pool = FACTORY.getPool(token0, token1, FEE_TIER);
         require(pool != address(0), PoolDoesNotExist());
-
         _rebalance(pool, sqrtPriceX96);
 
-        uint256 balance0;
-        uint256 balance1;
-
-        if (token0 == address(WETH)) {
-            WETH.deposit{ value: address(this).balance }();
-            balance0 = WETH.balanceOf(address(this));
-            balance1 = ERC20(token1).balanceOf(address(this));
-        } else if (token1 == address(WETH)) {
-            WETH.deposit{ value: address(this).balance }();
-            balance1 = WETH.balanceOf(address(this));
-            balance0 = ERC20(token0).balanceOf(address(this));
-        } else {
-            balance0 = ERC20(token0).balanceOf(address(this));
-            balance1 = ERC20(token1).balanceOf(address(this));
-        }
-
-        (uint256 depositAmount0, uint256 depositAmount1) =
-            MigrationMath.computeDepositAmounts(balance0, balance1, sqrtPriceX96);
-
-        if (depositAmount1 > balance1) {
-            (, depositAmount1) = MigrationMath.computeDepositAmounts(depositAmount0, balance1, sqrtPriceX96);
-        } else {
-            (depositAmount0,) = MigrationMath.computeDepositAmounts(balance0, depositAmount1, sqrtPriceX96);
-        }
+        (uint256 balance0, uint256 balance1) = _getTokenBalances(token0, token1);
 
         int24 tickSpacing = FACTORY.feeAmountTickSpacing(FEE_TIER);
+        (int24 tickLower, int24 tickUpper) = _calculateValidTicks(sqrtPriceX96, tickSpacing);
+
+        uint128 maxLiquidity = _computeMaxLiquidity(balance0, balance1, sqrtPriceX96, tickLower, tickUpper);
+        (uint256 depositAmount0, uint256 depositAmount1) =
+            _getTokenAmountsForLiquidity(maxLiquidity, sqrtPriceX96, tickLower, tickUpper);
 
         ERC20(token0).safeApprove(address(NONFUNGIBLE_POSITION_MANAGER), depositAmount0);
         ERC20(token1).safeApprove(address(NONFUNGIBLE_POSITION_MANAGER), depositAmount1);
-
-        (int24 finalTickLower, int24 finalTickUpper) = _calculateValidTicks(sqrtPriceX96, tickSpacing);
 
         (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1) = NONFUNGIBLE_POSITION_MANAGER.mint(
             INonfungiblePositionManager.MintParams({
                 token0: token0,
                 token1: token1,
                 fee: FEE_TIER,
-                tickLower: finalTickLower,
-                tickUpper: finalTickUpper,
+                tickLower: tickLower,
+                tickUpper: tickUpper,
                 amount0Desired: depositAmount0,
                 amount1Desired: depositAmount1,
-                amount0Min: 0, // no slippage protection as deposit amount is already calculated based on price, rest will be treated as dust as v2 migrator
-                amount1Min: 0,
+                amount0Min: depositAmount0 * 99 / 100,
+                amount1Min: depositAmount1 * 99 / 100,
                 recipient: address(CUSTOM_V3_LOCKER),
                 deadline: block.timestamp
             })
@@ -162,7 +144,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
 
         CUSTOM_V3_LOCKER.register(tokenId, amount0, amount1, poolFeeReceivers[pool], recipient);
 
-        _refundDustAndRevokeAllowances(token0, token1, balance0, balance1, depositAmount0, depositAmount1, recipient);
+        _refundDustAndRevokeAllowances(token0, token1, recipient);
 
         return liquidity;
     }
@@ -199,13 +181,7 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         }
 
         // swap any amount to move price - no tokens required as no liquidity
-        IUniswapV3Pool(pool).swap(
-            address(this),
-            zeroForOne,
-            1,
-            sqrtPriceLimitX96,
-            ""
-        );
+        IUniswapV3Pool(pool).swap(address(this), zeroForOne, 1, sqrtPriceLimitX96, "");
 
         (uint160 newSqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
         require(newSqrtPriceX96 == targetSqrtPriceX96, RebalanceFailed());
@@ -269,41 +245,154 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
     }
 
     /**
+     * @notice Computes the maximum liquidity that can be created with the given balances
+     * @dev Based on https://github.com/Uniswap/v4-core/blob/main/test/utils/LiquidityAmounts.sol
+     * @param balance0 Balance of token0
+     * @param balance1 Balance of token1
+     * @param sqrtPriceX96 Current sqrt price of the pool
+     * @param tickLower Lower tick boundary for the position
+     * @param tickUpper Upper tick boundary for the position
+     * @return liquidity The maximum liquidity that can be created
+     */
+    function _computeMaxLiquidity(
+        uint256 balance0,
+        uint256 balance1,
+        uint160 sqrtPriceX96,
+        int24 tickLower,
+        int24 tickUpper
+    ) internal pure returns (uint128 liquidity) {
+        uint160 sqrtRatioAX96 = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtRatioBX96 = TickMath.getSqrtPriceAtTick(tickUpper);
+
+        if (sqrtPriceX96 <= sqrtRatioAX96) {
+            liquidity = LiquidityAmounts.getLiquidityForAmount0(sqrtRatioAX96, sqrtRatioBX96, balance0);
+        } else if (sqrtPriceX96 >= sqrtRatioBX96) {
+            liquidity = LiquidityAmounts.getLiquidityForAmount1(sqrtRatioAX96, sqrtRatioBX96, balance1);
+        } else {
+            uint128 liquidity0 = LiquidityAmounts.getLiquidityForAmount0(sqrtPriceX96, sqrtRatioBX96, balance0);
+            uint128 liquidity1 = LiquidityAmounts.getLiquidityForAmount1(sqrtRatioAX96, sqrtPriceX96, balance1);
+
+            liquidity = liquidity0 < liquidity1 ? liquidity0 : liquidity1;
+        }
+    }
+
+    /**
+     * @notice Computes the exact token amounts needed for a given liquidity
+     * @dev Based on https://github.com/Uniswap/v4-core/blob/main/test/utils/LiquidityAmounts.sol
+     * @param liquidity The liquidity being valued
+     * @param sqrtPriceX96 The current sqrt price of the pool
+     * @param tickLower The lower tick boundary for the position
+     * @param tickUpper The upper tick boundary for the position
+     * @return amount0 The amount of token0 needed
+     * @return amount1 The amount of token1 needed
+     */
+    function _getTokenAmountsForLiquidity(
+        uint128 liquidity,
+        uint160 sqrtPriceX96,
+        int24 tickLower,
+        int24 tickUpper
+    ) internal pure returns (uint256 amount0, uint256 amount1) {
+        uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(tickUpper);
+
+        if (sqrtPriceX96 <= sqrtPriceAX96) {
+            amount0 = _getAmount0ForLiquidity(sqrtPriceAX96, sqrtPriceBX96, liquidity);
+        } else if (sqrtPriceX96 < sqrtPriceBX96) {
+            amount0 = _getAmount0ForLiquidity(sqrtPriceX96, sqrtPriceBX96, liquidity);
+            amount1 = _getAmount1ForLiquidity(sqrtPriceAX96, sqrtPriceX96, liquidity);
+        } else {
+            amount1 = _getAmount1ForLiquidity(sqrtPriceAX96, sqrtPriceBX96, liquidity);
+        }
+    }
+
+    /**
+     * @notice Computes the amount of token0 for a given amount of liquidity and a price range
+     * @dev Based on https://github.com/Uniswap/v4-core/blob/main/test/utils/LiquidityAmounts.sol
+     * @param sqrtPriceAX96 A sqrt price representing the first tick boundary
+     * @param sqrtPriceBX96 A sqrt price representing the second tick boundary
+     * @param liquidity The liquidity being valued
+     * @return amount0 The amount of token0
+     */
+    function _getAmount0ForLiquidity(
+        uint160 sqrtPriceAX96,
+        uint160 sqrtPriceBX96,
+        uint128 liquidity
+    ) internal pure returns (uint256 amount0) {
+        if (sqrtPriceAX96 > sqrtPriceBX96) (sqrtPriceAX96, sqrtPriceBX96) = (sqrtPriceBX96, sqrtPriceAX96);
+
+        return FullMath.mulDiv(
+            uint256(liquidity) << FixedPoint96.RESOLUTION, sqrtPriceBX96 - sqrtPriceAX96, sqrtPriceBX96
+        ) / sqrtPriceAX96;
+    }
+
+    /**
+     * @notice Computes the amount of token1 for a given amount of liquidity and a price range
+     * @dev Based on https://github.com/Uniswap/v4-core/blob/main/test/utils/LiquidityAmounts.sol
+     * @param sqrtPriceAX96 A sqrt price representing the first tick boundary
+     * @param sqrtPriceBX96 A sqrt price representing the second tick boundary
+     * @param liquidity The liquidity being valued
+     * @return amount1 The amount of token1
+     */
+    function _getAmount1ForLiquidity(
+        uint160 sqrtPriceAX96,
+        uint160 sqrtPriceBX96,
+        uint128 liquidity
+    ) internal pure returns (uint256 amount1) {
+        if (sqrtPriceAX96 > sqrtPriceBX96) (sqrtPriceAX96, sqrtPriceBX96) = (sqrtPriceBX96, sqrtPriceAX96);
+
+        return FullMath.mulDiv(liquidity, sqrtPriceBX96 - sqrtPriceAX96, FixedPoint96.Q96);
+    }
+
+    /**
      * @notice Refunds remaining tokens and ETH to the recipient and revokes allowances
      * @dev After minting the V3 position, any leftover tokens (dust) that couldn't be
      *      deposited due to price constraints are sent to the recipient.
      *      Also revokes token approvals.
      * @param token0 Address of token0
-     * @param token1 Address of token1  
-     * @param balance0 Original balance of token0 before minting
-     * @param balance1 Original balance of token1 before minting
-     * @param amount0 Amount of token0 actually used in minting
-     * @param amount1 Amount of token1 actually used in minting
+     * @param token1 Address of token1
      * @param recipient Address to receive the refunded tokens (timelock)
      */
-    function _refundDustAndRevokeAllowances(
-        address token0,
-        address token1,
-        uint256 balance0,
-        uint256 balance1,
-        uint256 amount0,
-        uint256 amount1,
-        address recipient
-    ) internal {
+    function _refundDustAndRevokeAllowances(address token0, address token1, address recipient) internal {
         if (address(this).balance > 0) {
             SafeTransferLib.safeTransferETH(recipient, address(this).balance);
         }
 
-        if (amount0 < balance0) {
+        uint256 balance0 = ERC20(token0).balanceOf(address(this));
+        uint256 balance1 = ERC20(token1).balanceOf(address(this));
+
+        if (balance0 != 0) {
             ERC20(token0).safeApprove(address(NONFUNGIBLE_POSITION_MANAGER), 0);
-            uint256 refund0 = balance0 - amount0;
-            ERC20(token0).safeTransfer(recipient, refund0);
+            ERC20(token0).safeTransfer(recipient, balance0);
         }
 
-        if (amount1 < balance1) {
+        if (balance1 != 0) {
             ERC20(token1).safeApprove(address(NONFUNGIBLE_POSITION_MANAGER), 0);
-            uint256 refund1 = balance1 - amount1;
-            ERC20(token1).safeTransfer(recipient, refund1);
+            ERC20(token1).safeTransfer(recipient, balance1);
+        }
+    }
+
+    /**
+     * @notice Gets the token balances for migration, considering WETH
+     * @param token0 Address of token0
+     * @param token1 Address of token1
+     * @return balance0 Balance of token0
+     * @return balance1 Balance of token1
+     */
+    function _getTokenBalances(
+        address token0,
+        address token1
+    ) internal returns (uint256 balance0, uint256 balance1) {
+        if (token0 == address(WETH)) {
+            WETH.deposit{ value: address(this).balance }();
+            balance0 = WETH.balanceOf(address(this));
+            balance1 = ERC20(token1).balanceOf(address(this));
+        } else if (token1 == address(WETH)) {
+            WETH.deposit{ value: address(this).balance }();
+            balance1 = WETH.balanceOf(address(this));
+            balance0 = ERC20(token0).balanceOf(address(this));
+        } else {
+            balance0 = ERC20(token0).balanceOf(address(this));
+            balance1 = ERC20(token1).balanceOf(address(this));
         }
     }
 
