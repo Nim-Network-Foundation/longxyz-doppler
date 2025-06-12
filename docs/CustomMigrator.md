@@ -10,7 +10,7 @@ Both of them have their own Locker contract(`CustomUniswapV3Locker.sol` & `Custo
 
 1. Users launch new token via Airlock's `create`, a Uniswap v4 pool with Doppler hook attached will be created via Initializer, and a Uniswap v3 pool for WETH <> token will be craeted via Custom v3 Migrator, and initialized with min/max tick
 2. Token sale in v4 pool will start and end according to the time set in Doppler hook, other people will buy the token with ETH or sell the token to get ETH in return as usual
-3. The trading continues, until either one of the conditions is fulfilled - [block.timestamp >= ending time set in Doppler hook] OR [total proceeds >= maximum proceeds set in Doppler hook]
+3. The trading continues, until either one of the conditions is fulfilled - `[block.timestamp >= ending time set in Doppler hook]` OR `[total proceeds >= maximum proceeds set in Doppler hook]`
 4. Call Airlock's `migrate` as long as the minimum proceed is reached after sale ends
 5. Custom v3 migrator calculates and migrates the most amount of liquidity it can send to the v3 pool for both ETH & token at the final price of the v4 pool, before sending the rest to the Timelock.
 6. Once the liquidity is migrated i.e. the NFT position for the LP is minted, it will be sent to the Custom v3 Locker contract and locked for 1 year
