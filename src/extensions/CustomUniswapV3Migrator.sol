@@ -119,15 +119,6 @@ contract CustomUniswapV3Migrator is ICustomUniswapV3Migrator, ImmutableAirlock {
         int24 tickSpacing = FACTORY.feeAmountTickSpacing(FEE_TIER);
         (int24 tickLower, int24 tickUpper) = _calculateValidTicks(sqrtPriceX96, tickSpacing);
 
-        // (uint256 depositAmount0, uint256 depositAmount1) =
-        //     MigrationMath.computeDepositAmounts(balance0, balance1, sqrtPriceX96);
-
-        // if (depositAmount1 > balance1) {
-        //     (, depositAmount1) = MigrationMath.computeDepositAmounts(depositAmount0, balance1, sqrtPriceX96);
-        // } else {
-        //     (depositAmount0,) = MigrationMath.computeDepositAmounts(balance0, depositAmount1, sqrtPriceX96);
-        // }
-
         uint128 maxLiquidity = _computeMaxLiquidity(balance0, balance1, sqrtPriceX96, tickLower, tickUpper);
         (uint256 depositAmount0, uint256 depositAmount1) =
             _getTokenAmountsForLiquidity(maxLiquidity, sqrtPriceX96, tickLower, tickUpper);
