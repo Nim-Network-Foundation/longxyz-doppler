@@ -211,15 +211,16 @@ contract CustomUniswapV3MigratorTest is Test {
         token0.transfer(address(testMigrator), amount0);
         token1.transfer(address(testMigrator), amount1);
 
-        uint256 airlockToken0BalanceBefore = token0.balanceOf(address(this));
-        uint256 airlockToken1BalanceBefore = token1.balanceOf(address(this));
+        address recipient = address(0xbeef);
+        uint256 recipientToken0BalanceBefore = token0.balanceOf(recipient);
+        uint256 recipientToken1BalanceBefore = token1.balanceOf(recipient);
 
         uint160 sqrtPriceX96_1_1 = 79_228_162_514_264_337_593_543_950_336; // sqrt(1) * 2^96
-        testMigrator.migrate(sqrtPriceX96_1_1, tokenA, tokenB, address(0xbeef));
+        testMigrator.migrate(sqrtPriceX96_1_1, tokenA, tokenB, recipient);
 
         assertTrue(
-            token0.balanceOf(address(this)) > airlockToken0BalanceBefore
-                || token1.balanceOf(address(this)) > airlockToken1BalanceBefore,
+            token0.balanceOf(recipient) > recipientToken0BalanceBefore
+                || token1.balanceOf(recipient) > recipientToken1BalanceBefore,
             "Should have received some token refund"
         );
     }
@@ -339,14 +340,15 @@ contract CustomUniswapV3MigratorTest is Test {
             tokenB.transfer(address(migrator), amount0);
         }
 
-        uint256 balance0Before = ERC20(token0).balanceOf(address(this));
-        uint256 balance1Before = ERC20(token1).balanceOf(address(this));
+        address recipient = address(0xbeef);
+        uint256 balance0Before = ERC20(token0).balanceOf(recipient);
+        uint256 balance1Before = ERC20(token1).balanceOf(recipient);
 
         uint160 targetPrice = 79_228_162_514_264_337_593_543_950_336;
-        migrator.migrate(targetPrice, token0, token1, address(0xbeef));
+        migrator.migrate(targetPrice, token0, token1, recipient);
 
-        uint256 balance0After = ERC20(token0).balanceOf(address(this));
-        uint256 balance1After = ERC20(token1).balanceOf(address(this));
+        uint256 balance0After = ERC20(token0).balanceOf(recipient);
+        uint256 balance1After = ERC20(token1).balanceOf(recipient);
 
         assertTrue(balance0After > balance0Before || balance1After > balance1Before, "Should have received dust refund");
     }
@@ -450,16 +452,17 @@ contract CustomUniswapV3MigratorTest is Test {
             tokenB.transfer(address(migrator), amount0);
         }
 
-        uint256 balanceBefore0 = ERC20(token0).balanceOf(address(this));
-        uint256 balanceBefore1 = ERC20(token1).balanceOf(address(this));
+        address recipient = address(0xbeef);
+        uint256 balanceBefore0 = ERC20(token0).balanceOf(recipient);
+        uint256 balanceBefore1 = ERC20(token1).balanceOf(recipient);
 
         uint160 sqrtPriceX96_1_1 = 79_228_162_514_264_337_593_543_950_336;
-        uint256 liquidity = migrator.migrate(sqrtPriceX96_1_1, token0, token1, address(0xbeef));
+        uint256 liquidity = migrator.migrate(sqrtPriceX96_1_1, token0, token1, recipient);
 
         assertGt(liquidity, 0, "Should have created liquidity");
 
-        uint256 balanceAfter0 = ERC20(token0).balanceOf(address(this));
-        uint256 balanceAfter1 = ERC20(token1).balanceOf(address(this));
+        uint256 balanceAfter0 = ERC20(token0).balanceOf(recipient);
+        uint256 balanceAfter1 = ERC20(token1).balanceOf(recipient);
 
         if (amount0 != amount1) {
             assertTrue(
@@ -510,6 +513,7 @@ contract CustomUniswapV3MigratorTest is Test {
         excessAmount1 = bound(excessAmount1, 0, 1e20);
 
         vm.assume(excessAmount0 != 0 || excessAmount1 != 0);
+        vm.assume(excessAmount0 != excessAmount1);
 
         uint256 baseAmount = 1e24;
 
@@ -532,14 +536,15 @@ contract CustomUniswapV3MigratorTest is Test {
             tokenB.transfer(address(migrator), totalAmount0);
         }
 
-        uint256 balanceBefore0 = ERC20(token0).balanceOf(address(this));
-        uint256 balanceBefore1 = ERC20(token1).balanceOf(address(this));
+        address recipient = address(0xbeef);
+        uint256 balanceBefore0 = ERC20(token0).balanceOf(recipient);
+        uint256 balanceBefore1 = ERC20(token1).balanceOf(recipient);
 
         uint160 sqrtPriceX96_1_1 = 79_228_162_514_264_337_593_543_950_336;
-        migrator.migrate(sqrtPriceX96_1_1, token0, token1, address(0xbeef));
+        migrator.migrate(sqrtPriceX96_1_1, token0, token1, recipient);
 
-        uint256 refund0 = ERC20(token0).balanceOf(address(this)) - balanceBefore0;
-        uint256 refund1 = ERC20(token1).balanceOf(address(this)) - balanceBefore1;
+        uint256 refund0 = ERC20(token0).balanceOf(recipient) - balanceBefore0;
+        uint256 refund1 = ERC20(token1).balanceOf(recipient) - balanceBefore1;
 
         assertTrue(refund0 > 0 || refund1 > 0, "Should receive some refund");
 

@@ -111,17 +111,22 @@ contract CustomUniswapV3Locker is ICustomUniswapV3Locker, IERC721Receiver {
     }
 
     function _distributeFees(uint256 collectedAmount0, uint256 collectedAmount1, uint256 tokenId) internal {
-        (,, address token0, address token1,,,,,,,,) = NONFUNGIBLE_POSITION_MANAGER.positions(tokenId);
-        address integratorFeeReceiver = positionStates[tokenId].integratorFeeReceiver;
+        if (collectedAmount0 > 0 || collectedAmount1 > 0) {
+            (,, address token0, address token1,,,,,,,,) = NONFUNGIBLE_POSITION_MANAGER.positions(tokenId);
+            address integratorFeeReceiver = positionStates[tokenId].integratorFeeReceiver;
 
-        // distribute fees - 95% to integratorFeeReceiver, 5% to DOPPLER_FEE_RECEIVER
-        uint256 dopplerFee0 = collectedAmount0 * DOPPLER_FEE_WAD / WAD;
-        uint256 dopplerFee1 = collectedAmount1 * DOPPLER_FEE_WAD / WAD;
-
-        ERC20(token0).safeTransfer(integratorFeeReceiver, collectedAmount0 - dopplerFee0);
-        ERC20(token1).safeTransfer(integratorFeeReceiver, collectedAmount1 - dopplerFee1);
-        ERC20(token0).safeTransfer(DOPPLER_FEE_RECEIVER, dopplerFee0);
-        ERC20(token1).safeTransfer(DOPPLER_FEE_RECEIVER, dopplerFee1);
+            // distribute fees - 95% to integratorFeeReceiver, 5% to DOPPLER_FEE_RECEIVER
+            if (collectedAmount0 > 0) {
+                uint256 dopplerFee0 = collectedAmount0 * DOPPLER_FEE_WAD / WAD;
+                ERC20(token0).safeTransfer(integratorFeeReceiver, collectedAmount0 - dopplerFee0);
+                ERC20(token0).safeTransfer(DOPPLER_FEE_RECEIVER, dopplerFee0);
+            }
+            if (collectedAmount1 > 0) {
+                uint256 dopplerFee1 = collectedAmount1 * DOPPLER_FEE_WAD / WAD;
+                ERC20(token1).safeTransfer(integratorFeeReceiver, collectedAmount1 - dopplerFee1);
+                ERC20(token1).safeTransfer(DOPPLER_FEE_RECEIVER, dopplerFee1);
+            }
+        }
     }
 
     function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {

@@ -131,7 +131,7 @@ contract V3MigratorTest is BaseTest {
         address integrator = _setupContracts();
         bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
 
-        (, address hook, address asset,,,,) = _createPool(integrator, liquidityMigratorData);
+        (, address hook, address asset,,, address timelock,) = _createPool(integrator, liquidityMigratorData);
 
         // Execute minimal swaps
         _executeMinimalSwapsToMinProceeds(hook);
@@ -140,18 +140,18 @@ contract V3MigratorTest is BaseTest {
         vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
 
         // Get balances before migration
-        uint256 airlockAssetBalanceBefore = ERC20(asset).balanceOf(address(airlock));
-        uint256 airlockWETHBalanceBefore = ERC20(address(migrator.WETH())).balanceOf(address(airlock));
+        uint256 timelockAssetBalanceBefore = ERC20(asset).balanceOf(timelock);
+        uint256 timelockWETHBalanceBefore = ERC20(address(migrator.WETH())).balanceOf(timelock);
 
         // Migrate
         airlock.migrate(asset);
 
-        uint256 airlockAssetBalanceAfter = ERC20(asset).balanceOf(address(airlock));
-        uint256 airlockWETHBalanceAfter = ERC20(address(migrator.WETH())).balanceOf(address(airlock));
+        uint256 timelockAssetBalanceAfter = ERC20(asset).balanceOf(timelock);
+        uint256 timelockWETHBalanceAfter = ERC20(address(migrator.WETH())).balanceOf(timelock);
 
-        bool hasDust = (airlockAssetBalanceAfter > airlockAssetBalanceBefore)
-            || (airlockWETHBalanceAfter > airlockWETHBalanceBefore);
-        assertTrue(hasDust, "Airlock should receive dust tokens");
+        bool hasDust = (timelockAssetBalanceAfter > timelockAssetBalanceBefore)
+            || (timelockWETHBalanceAfter > timelockWETHBalanceBefore);
+        assertTrue(hasDust, "Timelock should receive dust tokens");
     }
 
     function test_migrate_v3_poolCreation() public {
