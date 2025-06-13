@@ -26,7 +26,7 @@ import { DopplerDeployer, UniswapV4Initializer, IPoolInitializer } from "src/Uni
 import { CustomUniswapV3Migrator, IBaseSwapRouter02 } from "src/extensions/CustomUniswapV3Migrator.sol";
 import { TokenFactory, ITokenFactory } from "src/TokenFactory.sol";
 import { GovernanceFactory, IGovernanceFactory } from "src/GovernanceFactory.sol";
-import { Doppler } from "src/Doppler.sol";
+import { Doppler, CannotMigrate } from "src/Doppler.sol";
 import { CustomUniswapV3Locker } from "src/extensions/CustomUniswapV3Locker.sol";
 import { INonfungiblePositionManager } from "src/extensions/interfaces/INonfungiblePositionManager.sol";
 import {
@@ -61,12 +61,10 @@ contract V3MigratorTest is BaseTest {
     function setUp() public override {
         vm.createSelectFork(vm.envString("BASE_MAINNET_RPC_URL"), 31_118_046);
 
-        // Small hack here, requires cleanup
         DEFAULT_DOPPLER_CONFIG.startingTime = vm.getBlockTimestamp();
         DEFAULT_DOPPLER_CONFIG.endingTime = vm.getBlockTimestamp() + SALE_DURATION;
         super.setUp();
 
-        // Initialize test data
         tokenFactoryData = abi.encode("Test Token", "TEST", 0, 0, new address[](0), new uint256[](0), "TOKEN_URI");
         poolInitializerData = abi.encode(
             DEFAULT_MINIMUM_PROCEEDS,
@@ -88,86 +86,62 @@ contract V3MigratorTest is BaseTest {
         address integrator = _setupContracts();
         bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
 
-        (, address hook, address asset,,,, address migrationPool) = _createPool(integrator, liquidityMigratorData);
+        (, address hook, address asset,,, address timelock, address migrationPool) =
+            _createPool(integrator, liquidityMigratorData);
 
-        // (uint160 currentSqrtPriceX96,,,,,,) = IUniswapV3Pool(migrationPool).slot0();
-        // console.log("Current sqrt price:", currentSqrtPriceX96);
-        // console.log("Current tick:", TickMath.getTickAtSqrtPrice(currentSqrtPriceX96));
+        _assertDopplerInitialState(hook);
 
-        // Perform enough swaps to reach minimum proceeds
         _executeSwapsToMinProceeds(hook);
 
-        // Now advance to end time to allow migration
         vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
 
-        (,,, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
-        console.log("Final proceeds:", finalProceeds, "Minimum:", Doppler(payable(hook)).minimumProceeds());
-        console.log("Ending time:", Doppler(payable(hook)).endingTime());
-        console.log("Warp-ed timestamp:", block.timestamp);
+        assertGt(block.timestamp, Doppler(payable(hook)).endingTime(), "Should be past ending time");
 
+        (uint160 initialSqrtPriceX96,,,,,,) = IUniswapV3Pool(migrationPool).slot0();
+
+        BalanceSnapshot memory beforeSnapshot = _getBalances(hook, asset, timelock, migrationPool);
         airlock.migrate(asset);
+        BalanceSnapshot memory afterSnapshot = _getBalances(hook, asset, timelock, migrationPool);
+        _assertBalances(beforeSnapshot, afterSnapshot, asset);
 
-        assertEq(ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())), 1, "Locker should have one NFT");
+        uint128 poolLiquidity = IUniswapV3Pool(migrationPool).liquidity();
+        (uint160 finalSqrtPriceX96,,,,,,) = IUniswapV3Pool(migrationPool).slot0();
+        assertGt(poolLiquidity, 0, "V3 pool should have liquidity");
+        assertNotEq(finalSqrtPriceX96, initialSqrtPriceX96, "Pool price should have changed");
     }
 
     function test_migrate_v3_withMaxProceeds() public {
         address integrator = _setupContracts();
         bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
 
-        (, address hook, address asset,,,,) = _createPool(integrator, liquidityMigratorData);
+        (, address hook, address asset,,, address timelock, address migrationPool) =
+            _createPool(integrator, liquidityMigratorData);
+        _assertDopplerInitialState(hook);
 
-        // Perform enough swaps to reach max proceeds
         _executeSwapsToMaxProceeds(hook);
 
-        (,,, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
-        console.log("Final proceeds:", finalProceeds, "Maximum:", Doppler(payable(hook)).maximumProceeds());
+        (uint160 initialSqrtPriceX96,,,,,,) = IUniswapV3Pool(migrationPool).slot0();
 
+        BalanceSnapshot memory before = _getBalances(hook, asset, timelock, migrationPool);
         airlock.migrate(asset);
+        BalanceSnapshot memory afterSnapshot = _getBalances(hook, asset, timelock, migrationPool);
+        _assertBalances(before, afterSnapshot, asset);
 
-        assertEq(ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())), 1, "Locker should have one NFT");
+        uint128 poolLiquidity = IUniswapV3Pool(migrationPool).liquidity();
+        (uint160 finalSqrtPriceX96,,,,,,) = IUniswapV3Pool(migrationPool).slot0();
+        assertGt(poolLiquidity, 0, "V3 pool should have liquidity");
+        assertNotEq(finalSqrtPriceX96, initialSqrtPriceX96, "Pool price should have changed");
     }
 
-    function test_migrate_v3_dustRefund() public {
-        address integrator = _setupContracts();
-        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
-
-        (, address hook, address asset,,, address timelock,) = _createPool(integrator, liquidityMigratorData);
-
-        // Execute minimal swaps
-        _executeMinimalSwapsToMinProceeds(hook);
-
-        // Advance to end time
-        vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
-
-        // Get balances before migration
-        uint256 timelockAssetBalanceBefore = ERC20(asset).balanceOf(timelock);
-        uint256 timelockWETHBalanceBefore = ERC20(address(migrator.WETH())).balanceOf(timelock);
-
-        // Migrate
-        airlock.migrate(asset);
-
-        uint256 timelockAssetBalanceAfter = ERC20(asset).balanceOf(timelock);
-        uint256 timelockWETHBalanceAfter = ERC20(address(migrator.WETH())).balanceOf(timelock);
-
-        bool hasDust = (timelockAssetBalanceAfter > timelockAssetBalanceBefore)
-            || (timelockWETHBalanceAfter > timelockWETHBalanceBefore);
-        assertTrue(hasDust, "Timelock should receive dust tokens");
-    }
-
-    function test_migrate_v3_poolCreation() public {
-        uint24 differentFeeTier = 500; // 0.05% - this tier should not exist yet
-        (address integrator, CustomUniswapV3Migrator testMigrator) = _setupContractsWithCustomMigrator(differentFeeTier);
+    function test_migrate_v3_poolFeeTier() public {
+        uint24 differentFeeTier = 500; // 0.05%
+        (address integrator,) = _setupContractsWithCustomMigrator(differentFeeTier);
 
         bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
 
-        (,, address asset,,,, address migrationPool) = _createPool(integrator, liquidityMigratorData);
+        (,,,,,, address migrationPool) = _createPool(integrator, liquidityMigratorData);
 
-        // Verify pool was created during initialization
-        address weth = address(testMigrator.WETH());
-        address token0 = asset < weth ? asset : weth;
-        address token1 = asset < weth ? weth : asset;
-        address createdPool = IUniswapV3Factory(UNISWAP_V3_FACTORY_BASE).getPool(token0, token1, differentFeeTier);
-        assertEq(createdPool, migrationPool, "Pool should have been created");
+        assertEq(IUniswapV3Pool(migrationPool).fee(), differentFeeTier, "Wrong fee tier");
     }
 
     function test_migrate_v3_feeReceiverRegistration() public {
@@ -175,25 +149,301 @@ contract V3MigratorTest is BaseTest {
         address customIntegratorFeeReceiver = makeAddr("customIntegratorFeeReceiver");
         bytes memory liquidityMigratorData = abi.encode(customIntegratorFeeReceiver);
 
-        (, address hook, address asset,,,, address migrationPool) = _createPool(integrator, liquidityMigratorData);
+        (, address hook, address asset,,, address timelock, address migrationPool) =
+            _createPool(integrator, liquidityMigratorData);
+        _assertDopplerInitialState(hook);
 
-        // Verify fee receiver was registered
         assertEq(
             migrator.poolFeeReceivers(migrationPool), customIntegratorFeeReceiver, "Fee receiver should be registered"
         );
 
-        // Execute swaps to reach minimum proceeds
         _executeMinimalSwapsToMinProceeds(hook);
 
-        // Advance to end time and migrate
         vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
-        airlock.migrate(asset);
 
-        assertGt(
-            ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())),
-            0,
-            "Locker should have received NFT position"
+        BalanceSnapshot memory before = _getBalances(hook, asset, timelock, migrationPool);
+        airlock.migrate(asset);
+        BalanceSnapshot memory afterSnapshot = _getBalances(hook, asset, timelock, migrationPool);
+        _assertBalances(before, afterSnapshot, asset);
+
+        assertEq(
+            migrator.poolFeeReceivers(migrationPool), customIntegratorFeeReceiver, "Fee receiver should be registered"
         );
+    }
+
+    function test_migrate_v3_partialSale() public {
+        address integrator = _setupContracts();
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+
+        (, address hook, address asset,,,,) = _createPool(integrator, liquidityMigratorData);
+        _assertDopplerInitialState(hook);
+
+        uint256 targetProceeds = Doppler(payable(hook)).minimumProceeds();
+        uint256 halfTarget = targetProceeds / 2;
+
+        _executeSwapsToTargetProceeds(hook, halfTarget);
+
+        vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
+
+        (,,, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
+        assertLt(finalProceeds, targetProceeds, "Should not have reached minimum proceeds");
+        assertGe(finalProceeds, halfTarget, "Should have reached half target");
+
+        vm.expectRevert(CannotMigrate.selector);
+        airlock.migrate(asset);
+    }
+
+    function test_migrate_v3_multipleEpochs() public {
+        address integrator = _setupContracts();
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+
+        (, address hook, address asset,,, address timelock, address migrationPool) =
+            _createPool(integrator, liquidityMigratorData);
+        _assertDopplerInitialState(hook);
+
+        uint256 epochLength = DEFAULT_EPOCH_LENGTH;
+        uint256 targetProceeds = Doppler(payable(hook)).minimumProceeds();
+        uint256 maxProceeds = Doppler(payable(hook)).maximumProceeds();
+        uint256 numEpochs = 5;
+        uint256 totalTarget = targetProceeds + (targetProceeds / 10);
+        uint256 swapAmountPerEpoch = totalTarget / numEpochs;
+
+        for (uint256 i = 0; i < numEpochs; i++) {
+            (,,, uint256 currentProceeds,,) = Doppler(payable(hook)).state();
+            if (currentProceeds >= targetProceeds) {
+                break;
+            }
+
+            deal(address(this), swapAmountPerEpoch);
+
+            (Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing, IHooks hooks) =
+                Doppler(payable(hook)).poolKey();
+            PoolKey memory poolKey = PoolKey({
+                currency0: currency0,
+                currency1: currency1,
+                hooks: hooks,
+                fee: fee,
+                tickSpacing: tickSpacing
+            });
+
+            swapRouter.swap{ value: swapAmountPerEpoch }(
+                poolKey,
+                IPoolManager.SwapParams(true, -int256(swapAmountPerEpoch), MIN_PRICE_LIMIT),
+                PoolSwapTest.TestSettings(false, false),
+                ""
+            );
+
+            vm.warp(vm.getBlockTimestamp() + epochLength);
+        }
+
+        (,,, uint256 totalProceeds,,) = Doppler(payable(hook)).state();
+        assertGt(totalProceeds, targetProceeds, "Should have exceeded minimum proceeds");
+
+        vm.warp(Doppler(payable(hook)).endingTime() + 1);
+
+        BalanceSnapshot memory before = _getBalances(hook, asset, timelock, migrationPool);
+        airlock.migrate(asset);
+        BalanceSnapshot memory afterSnapshot = _getBalances(hook, asset, timelock, migrationPool);
+        _assertBalances(before, afterSnapshot, asset);
+    }
+
+    function test_migrate_v3_priceVolatility() public {
+        address integrator = _setupContracts();
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+
+        (, address hook, address asset,, address governance, address timelock, address migrationPool) =
+            _createPool(integrator, liquidityMigratorData);
+        _assertDopplerInitialState(hook);
+
+        vm.warp(Doppler(payable(hook)).startingTime());
+        _executeSingleSwap(hook, 0.1 ether);
+        vm.warp(Doppler(payable(hook)).startingTime() + Doppler(payable(hook)).epochLength());
+        _executeSingleSwap(hook, 0.5 ether);
+        vm.warp(Doppler(payable(hook)).startingTime() + Doppler(payable(hook)).epochLength() * 2);
+        _executeSingleSwap(hook, 1 ether);
+
+        _executeSwapsToMinProceeds(hook);
+
+        vm.warp(Doppler(payable(hook)).endingTime() + 1);
+
+        (,,, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
+        uint256 minProceeds = Doppler(payable(hook)).minimumProceeds();
+        assertGe(finalProceeds, minProceeds, "Should have reached minimum proceeds");
+
+        uint256 dopplerAssetBalance = ERC20(asset).balanceOf(hook);
+        uint256 dopplerETHBalance = hook.balance;
+        assertGt(dopplerAssetBalance, 0, "Doppler should have unsold tokens");
+        assertGt(dopplerETHBalance, 0, "Doppler should have ETH proceeds");
+
+        BalanceSnapshot memory before = _getBalances(hook, asset, timelock, migrationPool);
+        airlock.migrate(asset);
+        BalanceSnapshot memory afterSnapshot = _getBalances(hook, asset, timelock, migrationPool);
+        _assertBalances(before, afterSnapshot, asset);
+
+        (uint160 finalPrice,,,,,,) = IUniswapV3Pool(migrationPool).slot0();
+        assertGt(finalPrice, 0, "V3 pool should have valid price");
+        uint128 poolLiquidity = IUniswapV3Pool(migrationPool).liquidity();
+        assertGt(poolLiquidity, 0, "V3 pool should have liquidity");
+    }
+
+    function test_migrate_v3_exactMinimumProceeds() public {
+        address integrator = _setupContracts();
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+
+        (, address hook, address asset,,, address timelock, address migrationPool) =
+            _createPool(integrator, liquidityMigratorData);
+        _assertDopplerInitialState(hook);
+
+        uint256 minProceeds = Doppler(payable(hook)).minimumProceeds();
+
+        _executeSwapsToExactProceeds(hook, minProceeds + (minProceeds / 1000)); // Add 0.1% buffer
+
+        (,,, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
+        assertGe(finalProceeds, minProceeds, "Should have at least minimum proceeds");
+        assertLe(finalProceeds, minProceeds + (minProceeds / 100), "Should be close to minimum proceeds");
+
+        vm.warp(Doppler(payable(hook)).endingTime() + 1);
+
+        BalanceSnapshot memory before = _getBalances(hook, asset, timelock, migrationPool);
+        airlock.migrate(asset);
+        BalanceSnapshot memory afterSnapshot = _getBalances(hook, asset, timelock, migrationPool);
+        _assertBalances(before, afterSnapshot, asset);
+    }
+
+    function test_migrate_v3_lateStageRush() public {
+        address integrator = _setupContracts();
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+
+        (, address hook, address asset,,, address timelock, address migrationPool) =
+            _createPool(integrator, liquidityMigratorData);
+        _assertDopplerInitialState(hook);
+
+        uint256 endTime = Doppler(payable(hook)).endingTime();
+        uint256 rushTime = endTime - 7200;
+        vm.warp(rushTime);
+
+        _executeSwapsToMinProceedsWithDeadline(hook, endTime - 60);
+
+        assertLt(block.timestamp, endTime, "Should still be in sale period");
+
+        vm.warp(endTime + 1);
+
+        BalanceSnapshot memory before = _getBalances(hook, asset, timelock, migrationPool);
+        airlock.migrate(asset);
+        BalanceSnapshot memory afterSnapshot = _getBalances(hook, asset, timelock, migrationPool);
+        _assertBalances(before, afterSnapshot, asset);
+    }
+
+    function testFuzz_migrate_v3_withVariousFeeTiers(
+        uint24 feeTier
+    ) public {
+        vm.assume(feeTier == 500 || feeTier == 3000 || feeTier == 10_000);
+
+        (address integrator, CustomUniswapV3Migrator testMigrator) = _setupContractsWithCustomMigrator(feeTier);
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+
+        (, address hook, address asset,,, address timelock, address migrationPool) =
+            _createPool(integrator, liquidityMigratorData);
+        _assertDopplerInitialState(hook);
+
+        address weth = address(testMigrator.WETH());
+        address token0 = asset < weth ? asset : weth;
+        address token1 = asset < weth ? weth : asset;
+        address createdPool = IUniswapV3Factory(UNISWAP_V3_FACTORY_BASE).getPool(token0, token1, feeTier);
+        assertEq(createdPool, migrationPool, "Pool should have been created with correct fee tier");
+
+        _executeMinimalSwapsToMinProceeds(hook);
+        vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
+
+        BalanceSnapshot memory before = _getBalances(hook, asset, timelock, migrationPool);
+        airlock.migrate(asset);
+        BalanceSnapshot memory afterSnapshot = _getBalances(hook, asset, timelock, migrationPool);
+        _assertBalances(before, afterSnapshot, asset);
+    }
+
+    function testFuzz_migrate_v3_withVariousSwapAmounts(
+        uint256 swapAmount1,
+        uint256 swapAmount2,
+        uint256 swapAmount3
+    ) public {
+        swapAmount1 = bound(swapAmount1, 0.1 ether, 100 ether);
+        swapAmount2 = bound(swapAmount2, 0.1 ether, 100 ether);
+        swapAmount3 = bound(swapAmount3, 0.1 ether, 100 ether);
+
+        address integrator = _setupContracts();
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+
+        (, address hook, address asset,,, address timelock, address migrationPool) =
+            _createPool(integrator, liquidityMigratorData);
+        _assertDopplerInitialState(hook);
+
+        _executeFuzzedSwaps(hook, swapAmount1, swapAmount2, swapAmount3);
+
+        vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
+
+        (,,, uint256 totalProceeds,,) = Doppler(payable(hook)).state();
+
+        // Only migrate if minimum proceeds were reached
+        if (totalProceeds >= Doppler(payable(hook)).minimumProceeds()) {
+            BalanceSnapshot memory before = _getBalances(hook, asset, timelock, migrationPool);
+            airlock.migrate(asset);
+            BalanceSnapshot memory afterSnapshot = _getBalances(hook, asset, timelock, migrationPool);
+            _assertBalances(before, afterSnapshot, asset);
+        }
+    }
+
+    function testFuzz_migrate_v3_withVariousFeeReceivers(
+        address feeReceiver
+    ) public {
+        vm.assume(feeReceiver != address(0));
+        vm.assume(uint160(feeReceiver) > 255); // Not a precompile
+
+        address integrator = _setupContracts();
+        bytes memory liquidityMigratorData = abi.encode(feeReceiver);
+
+        (, address hook, address asset,,, address timelock, address migrationPool) =
+            _createPool(integrator, liquidityMigratorData);
+        _assertDopplerInitialState(hook);
+
+        assertEq(migrator.poolFeeReceivers(migrationPool), feeReceiver, "Fee receiver should match");
+
+        _executeMinimalSwapsToMinProceeds(hook);
+        vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
+
+        BalanceSnapshot memory before = _getBalances(hook, asset, timelock, migrationPool);
+        airlock.migrate(asset);
+        BalanceSnapshot memory afterSnapshot = _getBalances(hook, asset, timelock, migrationPool);
+        _assertBalances(before, afterSnapshot, asset);
+    }
+
+    function testFuzz_migrate_v3_withVariousTimings(
+        uint256 swapDelay1,
+        uint256 swapDelay2,
+        uint256 migrationDelay
+    ) public {
+        swapDelay1 = bound(swapDelay1, 100, 3600);
+        swapDelay2 = bound(swapDelay2, 100, 3600);
+        migrationDelay = bound(migrationDelay, 1, 86_400);
+
+        address integrator = _setupContracts();
+        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
+
+        (, address hook, address asset,,, address timelock, address migrationPool) =
+            _createPool(integrator, liquidityMigratorData);
+        _assertDopplerInitialState(hook);
+
+        _executeSwapsWithDelays(hook, swapDelay1, swapDelay2);
+
+        vm.warp(Doppler(payable(hook)).endingTime() + migrationDelay);
+
+        (,,, uint256 totalProceeds,,) = Doppler(payable(hook)).state();
+
+        if (totalProceeds >= Doppler(payable(hook)).minimumProceeds()) {
+            BalanceSnapshot memory before = _getBalances(hook, asset, timelock, migrationPool);
+            airlock.migrate(asset);
+            BalanceSnapshot memory afterSnapshot = _getBalances(hook, asset, timelock, migrationPool);
+            _assertBalances(before, afterSnapshot, asset);
+        }
     }
 
     function _setupContracts() internal returns (address integrator) {
@@ -291,6 +541,27 @@ contract V3MigratorTest is BaseTest {
         });
 
         (, pool, governance, timelock, migrationPool) = airlock.create(createParams);
+
+        _assertMigrationPoolState(asset, migrationPool, migrator.FEE_TIER());
+    }
+
+    function _assertMigrationPoolState(address asset, address migrationPool, uint24 feeTier) internal view {
+        address weth = address(migrator.WETH());
+        (address expectedToken0, address expectedToken1) = asset < weth ? (asset, weth) : (weth, asset);
+        address createdMigrationPool =
+            IUniswapV3Factory(UNISWAP_V3_FACTORY_BASE).getPool(expectedToken0, expectedToken1, feeTier);
+        assertNotEq(createdMigrationPool, address(0), "Pool should exist");
+        assertEq(createdMigrationPool, migrationPool, "Pool should match expected tokens");
+
+        (uint160 initialSqrtPriceX96,,,,,,) = IUniswapV3Pool(migrationPool).slot0();
+        int24 initialTick = TickMath.getTickAtSqrtPrice(initialSqrtPriceX96);
+
+        int24 tickSpacing = IUniswapV3Pool(migrationPool).tickSpacing();
+        bool isAssetToken0 = asset < weth;
+        int24 expectedInitialTick = isAssetToken0
+            ? TickMath.minUsableTick(tickSpacing) + tickSpacing
+            : TickMath.maxUsableTick(tickSpacing) - tickSpacing;
+        assertEq(initialTick, expectedInitialTick, "Pool should be initialized at extreme tick");
     }
 
     function _executeSwapsToMinProceeds(
@@ -329,6 +600,53 @@ contract V3MigratorTest is BaseTest {
 
             vm.warp(vm.getBlockTimestamp() + 200);
         }
+
+        (,,, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
+        assertGe(finalProceeds, Doppler(payable(hook)).minimumProceeds(), "Should reach minimum proceeds");
+    }
+
+    function _executeSwapsToMinProceedsWithDeadline(address hook, uint256 deadline) internal {
+        (Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing, IHooks hooks) =
+            Doppler(payable(hook)).poolKey();
+
+        PoolKey memory poolKey =
+            PoolKey({ currency0: currency0, currency1: currency1, hooks: hooks, fee: fee, tickSpacing: tickSpacing });
+
+        uint256 swapCount = 0;
+        while (true) {
+            swapCount++;
+            if (swapCount > 100) {
+                revert("Too many swaps, test failed");
+            }
+
+            // Check if we're getting too close to deadline
+            if (block.timestamp + 200 > deadline) {
+                break;
+            }
+
+            uint256 swapAmount = 1 ether + (swapCount * 1 ether);
+            deal(address(this), swapAmount);
+
+            (uint160 currentSqrtPrice,,,) = manager.getSlot0(poolKey.toId());
+            uint160 priceLimit = currentSqrtPrice > 1000 ? currentSqrtPrice - 1000 : TickMath.MIN_SQRT_PRICE + 1;
+
+            swapRouter.swap{ value: swapAmount }(
+                poolKey,
+                IPoolManager.SwapParams(true, -int256(swapAmount), priceLimit),
+                PoolSwapTest.TestSettings(false, false),
+                ""
+            );
+
+            (,,, uint256 totalProceeds,,) = Doppler(payable(hook)).state();
+            if (totalProceeds >= Doppler(payable(hook)).minimumProceeds()) {
+                break;
+            }
+
+            vm.warp(vm.getBlockTimestamp() + 200);
+        }
+
+        (,,, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
+        assertGe(finalProceeds, Doppler(payable(hook)).minimumProceeds(), "Should reach minimum proceeds");
     }
 
     function _executeSwapsToMaxProceeds(
@@ -364,26 +682,6 @@ contract V3MigratorTest is BaseTest {
             (,, uint256 totalTokensSold, uint256 totalProceeds,,) = Doppler(payable(hook)).state();
             totalEthProceeds = totalProceeds;
 
-            // uint160 sqrtPriceX96;
-            // int24 tick;
-
-            // try lensQuoter.quoteDopplerLensData(
-            //     IV4Quoter.QuoteExactSingleParams({ poolKey: key, zeroForOne: !isToken0, exactAmount: 1, hookData: "" })
-            // ) {
-            //     DopplerLensReturnData memory lensData = lensQuoter.quoteDopplerLensData(
-            //         IV4Quoter.QuoteExactSingleParams({
-            //             poolKey: key,
-            //             zeroForOne: !isToken0,
-            //             exactAmount: 1,
-            //             hookData: ""
-            //         })
-            //     );
-            //     sqrtPriceX96 = lensData.sqrtPriceX96;
-            //     tick = lensData.tick;
-            // } catch (bytes memory) {
-            //     (sqrtPriceX96, tick,,) = manager.getSlot0(key.toId());
-            // }
-
             console.log("\n-------------- SALE No. %d ------------------", count);
             // console.log("current epoch", hook.getCurrentEpoch());
             console.log("token bought", tokenBought);
@@ -396,6 +694,9 @@ contract V3MigratorTest is BaseTest {
             vm.warp(vm.getBlockTimestamp() + 200);
             count++;
         }
+
+        (,, uint256 totalTokensSold, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
+        assertGe(finalProceeds, Doppler(payable(hook)).maximumProceeds(), "Should reach maximum proceeds");
     }
 
     function _executeMinimalSwapsToMinProceeds(
@@ -428,121 +729,9 @@ contract V3MigratorTest is BaseTest {
 
             vm.warp(vm.getBlockTimestamp() + 200);
         }
-    }
 
-    function testFuzz_migrate_v3_withVariousFeeTiers(
-        uint24 feeTier
-    ) public {
-        vm.assume(feeTier == 500 || feeTier == 3000 || feeTier == 10_000);
-
-        (address integrator, CustomUniswapV3Migrator testMigrator) = _setupContractsWithCustomMigrator(feeTier);
-        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
-
-        (, address hook, address asset,,,, address migrationPool) = _createPool(integrator, liquidityMigratorData);
-
-        address weth = address(testMigrator.WETH());
-        address token0 = asset < weth ? asset : weth;
-        address token1 = asset < weth ? weth : asset;
-        address createdPool = IUniswapV3Factory(UNISWAP_V3_FACTORY_BASE).getPool(token0, token1, feeTier);
-        assertEq(createdPool, migrationPool, "Pool should have been created with correct fee tier");
-
-        _executeMinimalSwapsToMinProceeds(hook);
-        vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
-        airlock.migrate(asset);
-
-        assertGt(
-            ERC721(address(NFPM)).balanceOf(address(testMigrator.CUSTOM_V3_LOCKER())),
-            0,
-            "Locker should have NFT position"
-        );
-    }
-
-    function testFuzz_migrate_v3_withVariousSwapAmounts(
-        uint256 swapAmount1,
-        uint256 swapAmount2,
-        uint256 swapAmount3
-    ) public {
-        // Bound swap amounts to reasonable range
-        swapAmount1 = bound(swapAmount1, 0.1 ether, 100 ether);
-        swapAmount2 = bound(swapAmount2, 0.1 ether, 100 ether);
-        swapAmount3 = bound(swapAmount3, 0.1 ether, 100 ether);
-
-        address integrator = _setupContracts();
-        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
-
-        (, address hook, address asset,,,,) = _createPool(integrator, liquidityMigratorData);
-
-        // Execute fuzzed swaps
-        _executeFuzzedSwaps(hook, swapAmount1, swapAmount2, swapAmount3);
-
-        // Advance to end time and migrate
-        vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
-
-        (,,, uint256 totalProceeds,,) = Doppler(payable(hook)).state();
-
-        // Only migrate if minimum proceeds were reached
-        if (totalProceeds >= Doppler(payable(hook)).minimumProceeds()) {
-            airlock.migrate(asset);
-            assertGt(
-                ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())),
-                0,
-                "Locker should have NFT position"
-            );
-        }
-    }
-
-    function testFuzz_migrate_v3_withVariousFeeReceivers(
-        address feeReceiver
-    ) public {
-        vm.assume(feeReceiver != address(0));
-        vm.assume(uint160(feeReceiver) > 255); // Not a precompile
-
-        address integrator = _setupContracts();
-        bytes memory liquidityMigratorData = abi.encode(feeReceiver);
-
-        (, address hook, address asset,,,, address migrationPool) = _createPool(integrator, liquidityMigratorData);
-
-        // Verify fee receiver was registered
-        assertEq(migrator.poolFeeReceivers(migrationPool), feeReceiver, "Fee receiver should match");
-
-        // Execute swaps and migrate
-        _executeMinimalSwapsToMinProceeds(hook);
-        vm.warp(vm.getBlockTimestamp() + SALE_DURATION + 1);
-        airlock.migrate(asset);
-
-        assertGt(
-            ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())), 0, "Locker should have NFT position"
-        );
-    }
-
-    function testFuzz_migrate_v3_withVariousTimings(
-        uint256 swapDelay1,
-        uint256 swapDelay2,
-        uint256 migrationDelay
-    ) public {
-        swapDelay1 = bound(swapDelay1, 100, 3600);
-        swapDelay2 = bound(swapDelay2, 100, 3600);
-        migrationDelay = bound(migrationDelay, 1, 86_400);
-
-        address integrator = _setupContracts();
-        bytes memory liquidityMigratorData = abi.encode(INTEGRATOR_FEE_RECEIVER);
-
-        (, address hook, address asset,,,,) = _createPool(integrator, liquidityMigratorData);
-
-        _executeSwapsWithDelays(hook, swapDelay1, swapDelay2);
-
-        vm.warp(Doppler(payable(hook)).endingTime() + migrationDelay);
-
-        (,,, uint256 totalProceeds,,) = Doppler(payable(hook)).state();
-
-        if (totalProceeds >= Doppler(payable(hook)).minimumProceeds()) {
-            airlock.migrate(asset);
-            assertGt(
-                ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER())),
-                0,
-                "Locker should have NFT position"
-            );
-        }
+        (,,, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
+        assertGe(finalProceeds, Doppler(payable(hook)).minimumProceeds(), "Should reach minimum proceeds");
     }
 
     function _executeFuzzedSwaps(address hook, uint256 amount1, uint256 amount2, uint256 amount3) internal {
@@ -578,6 +767,92 @@ contract V3MigratorTest is BaseTest {
                 vm.warp(vm.getBlockTimestamp() + 200);
             }
         }
+    }
+
+    function _executeSwapsToExactProceeds(address hook, uint256 targetProceeds) internal {
+        (Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing, IHooks hooks) =
+            Doppler(payable(hook)).poolKey();
+
+        PoolKey memory poolKey =
+            PoolKey({ currency0: currency0, currency1: currency1, hooks: hooks, fee: fee, tickSpacing: tickSpacing });
+
+        uint256 swapIncrement = targetProceeds / 100; // 1% increments
+
+        while (true) {
+            (,,, uint256 currentProceeds,,) = Doppler(payable(hook)).state();
+            if (currentProceeds >= targetProceeds) break;
+
+            uint256 remaining = targetProceeds - currentProceeds;
+            uint256 swapAmount = remaining < swapIncrement ? remaining : swapIncrement;
+
+            deal(address(this), swapAmount);
+
+            (uint160 currentSqrtPrice,,,) = manager.getSlot0(poolKey.toId());
+            uint160 priceLimit;
+            if (currentSqrtPrice > TickMath.MIN_SQRT_PRICE + 1000) {
+                priceLimit = currentSqrtPrice - 1000;
+            } else {
+                priceLimit = TickMath.MIN_SQRT_PRICE + 1;
+            }
+
+            try swapRouter.swap{ value: swapAmount }(
+                poolKey,
+                IPoolManager.SwapParams(true, -int256(swapAmount), priceLimit),
+                PoolSwapTest.TestSettings(false, false),
+                ""
+            ) { } catch {
+                // If swap fails, try with smaller amount
+                swapAmount = swapAmount / 2;
+                if (swapAmount == 0) break;
+                deal(address(this), swapAmount);
+                try swapRouter.swap{ value: swapAmount }(
+                    poolKey,
+                    IPoolManager.SwapParams(true, -int256(swapAmount), priceLimit),
+                    PoolSwapTest.TestSettings(false, false),
+                    ""
+                ) { } catch {
+                    break;
+                }
+            }
+
+            vm.warp(vm.getBlockTimestamp() + 10);
+        }
+
+        (,,, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
+        assertGe(finalProceeds, targetProceeds, "Should reach target proceeds");
+    }
+
+    function _executeSwapsToTargetProceeds(address hook, uint256 targetProceeds) internal {
+        (Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing, IHooks hooks) =
+            Doppler(payable(hook)).poolKey();
+
+        PoolKey memory poolKey =
+            PoolKey({ currency0: currency0, currency1: currency1, hooks: hooks, fee: fee, tickSpacing: tickSpacing });
+
+        while (true) {
+            (,,, uint256 currentProceeds,,) = Doppler(payable(hook)).state();
+            if (currentProceeds >= targetProceeds) {
+                break;
+            }
+
+            uint256 swapAmount = 0.1 ether;
+            deal(address(this), swapAmount);
+
+            (uint160 currentSqrtPrice,,,) = manager.getSlot0(poolKey.toId());
+            uint160 priceLimit = currentSqrtPrice > 1000 ? currentSqrtPrice - 1000 : TickMath.MIN_SQRT_PRICE + 1;
+
+            swapRouter.swap{ value: swapAmount }(
+                poolKey,
+                IPoolManager.SwapParams(true, -int256(swapAmount), priceLimit),
+                PoolSwapTest.TestSettings(false, false),
+                ""
+            );
+
+            vm.warp(vm.getBlockTimestamp() + 100);
+        }
+
+        (,,, uint256 finalProceeds,,) = Doppler(payable(hook)).state();
+        assertGe(finalProceeds, targetProceeds, "Should reach target proceeds");
     }
 
     function _executeSwapsWithDelays(address hook, uint256 delay1, uint256 delay2) internal {
@@ -653,5 +928,114 @@ contract V3MigratorTest is BaseTest {
                 vm.warp(vm.getBlockTimestamp() + 200);
             }
         }
+    }
+
+    function _executeSingleSwap(address hook, uint256 amount) internal {
+        (Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing, IHooks hooks) =
+            Doppler(payable(hook)).poolKey();
+        PoolKey memory poolKey =
+            PoolKey({ currency0: currency0, currency1: currency1, hooks: hooks, fee: fee, tickSpacing: tickSpacing });
+
+        deal(address(this), amount);
+        swapRouter.swap{ value: amount }(
+            poolKey,
+            IPoolManager.SwapParams(true, -int256(amount), MIN_PRICE_LIMIT),
+            PoolSwapTest.TestSettings(false, false),
+            ""
+        );
+    }
+
+    struct BalanceSnapshot {
+        uint256 dopplerAsset;
+        uint256 dopplerETH;
+        uint256 poolManagerAsset;
+        uint256 poolManagerETH;
+        uint256 timelockAsset;
+        uint256 timelockWETH;
+        uint256 airlockAsset;
+        uint256 airlockWETH;
+        uint256 airlockETH;
+        uint256 v3PoolAsset;
+        uint256 v3PoolWETH;
+        uint256 lockerNftCount;
+    }
+
+    function _getBalances(
+        address hook,
+        address asset,
+        address timelock,
+        address migrationPool
+    ) internal view returns (BalanceSnapshot memory) {
+        address weth = address(migrator.WETH());
+
+        return BalanceSnapshot({
+            dopplerAsset: ERC20(asset).balanceOf(hook),
+            dopplerETH: hook.balance,
+            poolManagerAsset: ERC20(asset).balanceOf(address(manager)),
+            poolManagerETH: address(manager).balance,
+            timelockAsset: ERC20(asset).balanceOf(timelock),
+            timelockWETH: ERC20(weth).balanceOf(timelock),
+            airlockAsset: ERC20(asset).balanceOf(address(airlock)),
+            airlockWETH: ERC20(weth).balanceOf(address(airlock)),
+            airlockETH: address(airlock).balance,
+            v3PoolAsset: ERC20(asset).balanceOf(migrationPool),
+            v3PoolWETH: ERC20(weth).balanceOf(migrationPool),
+            lockerNftCount: ERC721(address(NFPM)).balanceOf(address(migrator.CUSTOM_V3_LOCKER()))
+        });
+    }
+
+    function _assertBalances(
+        BalanceSnapshot memory beforeSnapshot,
+        BalanceSnapshot memory afterSnapshot,
+        address asset
+    ) internal view {
+        address weth = address(migrator.WETH());
+
+        uint256 assetTakenFromPoolManager = beforeSnapshot.poolManagerAsset - afterSnapshot.poolManagerAsset;
+        uint256 ethTakenFromPoolManager = beforeSnapshot.poolManagerETH - afterSnapshot.poolManagerETH;
+
+        uint256 assetFeesRetained = afterSnapshot.airlockAsset - beforeSnapshot.airlockAsset;
+        uint256 wethFeesRetained = (afterSnapshot.airlockWETH + afterSnapshot.airlockETH)
+            - (beforeSnapshot.airlockWETH + beforeSnapshot.airlockETH);
+
+        uint256 totalAssetMigrated = beforeSnapshot.dopplerAsset + assetTakenFromPoolManager;
+        uint256 totalETHMigrated = beforeSnapshot.dopplerETH + ethTakenFromPoolManager;
+
+        uint256 timelockAssetDust = afterSnapshot.timelockAsset - beforeSnapshot.timelockAsset;
+        uint256 timelockWETHDust = afterSnapshot.timelockWETH - beforeSnapshot.timelockWETH;
+
+        assertEq(
+            afterSnapshot.v3PoolAsset + timelockAssetDust + assetFeesRetained,
+            totalAssetMigrated,
+            "Asset balance invariant: v3 pool + timelock dust + fees should equal total migrated"
+        );
+
+        assertEq(
+            afterSnapshot.v3PoolWETH + timelockWETHDust + wethFeesRetained,
+            totalETHMigrated,
+            "ETH/WETH balance invariant: v3 pool + timelock dust + fees should equal total ETH migrated"
+        );
+
+        assertGe(
+            afterSnapshot.timelockAsset, beforeSnapshot.timelockAsset, "Timelock asset balance should not decrease"
+        );
+        assertGe(afterSnapshot.timelockWETH, beforeSnapshot.timelockWETH, "Timelock WETH balance should not decrease");
+        assertGt(beforeSnapshot.dopplerAsset, 0, "Doppler should have unsold tokens");
+        assertGt(beforeSnapshot.dopplerETH, 0, "Doppler should have ETH proceeds");
+        assertEq(afterSnapshot.dopplerAsset, 0, "Doppler should have no asset left");
+        assertEq(afterSnapshot.dopplerETH, 0, "Doppler should have no ETH left");
+        assertEq(ERC20(asset).balanceOf(address(migrator)), 0, "Migrator should have no asset left");
+        assertEq(ERC20(weth).balanceOf(address(migrator)), 0, "Migrator should have no WETH left");
+        assertTrue(timelockAssetDust > 0 || timelockWETHDust > 0, "Timelock should receive dust tokens");
+        assertEq(afterSnapshot.lockerNftCount - beforeSnapshot.lockerNftCount, 1, "Locker should have got one NFT");
+    }
+
+    function _assertDopplerInitialState(
+        address hook
+    ) internal view {
+        (uint256 initialTokensSold, uint256 initialProceeds) = (0, 0);
+        (,, initialTokensSold, initialProceeds,,) = Doppler(payable(hook)).state();
+        assertEq(initialTokensSold, 0, "Should start with no tokens sold");
+        assertEq(initialProceeds, 0, "Should start with no proceeds");
     }
 }
